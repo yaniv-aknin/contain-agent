@@ -1,1 +1,7 @@
-A containerized environment to run claude code.
+# contain-agent
+
+A containerized environment to run coding agents.
+
+## Build container
+
+`docker build -t contain-agent .`

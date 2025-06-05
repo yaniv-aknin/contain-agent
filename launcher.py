@@ -9,23 +9,17 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description='Launch Claude Code container')
     parser.add_argument('--no-rm', action='store_true', help='Do not remove container after exit')
+    parser.add_argument('--profile', default='default', help='Profile to use (default: default)')
     parser.add_argument('code_dir', nargs='?', default=os.getcwd(), help='Code directory to mount (default: current directory)')
     args = parser.parse_args()
 
     # Get the directory where the script is located
     script_dir = Path(__file__).parent.absolute()
 
-    # Find credentials relative to the script location
-    claude_json = script_dir / "claude.json"
-    dot_claude = script_dir / "dot-claude"
-
-    # Check if credentials exist
-    if not claude_json.exists():
-        print(f"Error: claude.json not found at {claude_json}")
-        sys.exit(1)
-
-    if not dot_claude.exists():
-        print(f"Error: dot-claude directory not found at {dot_claude}")
+    # Find profile directory
+    profile_dir = script_dir / "profiles" / args.profile
+    if not profile_dir.exists():
+        print(f"Error: Profile '{args.profile}' not found at {profile_dir}")
         sys.exit(1)
 
     # Determine the code directory
@@ -35,8 +29,8 @@ def main():
         print(f"Error: Cannot resolve directory '{args.code_dir}' to absolute path")
         sys.exit(1)
 
-    print("Launching Claude Code container with:")
-    print(f" - Credentials from: {script_dir}")
+    print("Launching container with:")
+    print(f" - Profile: {args.profile}")
     print(f" - Working directory: {code_dir}")
     if args.no_rm:
         print(" - Container will be preserved after exit")
@@ -47,11 +41,16 @@ def main():
     docker_cmd = [
         "docker", "run", "-it",
         *([] if args.no_rm else ["--rm"]),
-        "-v", f"{claude_json}:/root/.claude.json",
-        "-v", f"{dot_claude}:/root/.claude",
         "-v", f"{code_dir}:/app",
-        "claude-code", "bash"
     ]
+
+    # Add all top-level files and directories from the profile directory as volume mounts
+    for profile_path in profile_dir.iterdir():
+        # Mount to /root maintaining the same name
+        docker_cmd.extend(["-v", f"{profile_path}:/root/{profile_path.name}"])
+
+    # Add the container name and command
+    docker_cmd.extend(["contain-agent", "bash"])
 
     # Run the container
     try:
