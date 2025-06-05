@@ -6,10 +6,21 @@ import sys
 import subprocess
 from pathlib import Path
 
+def is_sensitive_directory(path: Path) -> bool:
+    """Check if the given path is a sensitive directory that should be protected."""
+    sensitive_paths = [
+        Path('/'),
+        Path('/tmp'),
+        Path(os.path.expanduser('~')),  # $HOME
+        Path('/etc')
+    ]
+    return any(path.samefile(sensitive) for sensitive in sensitive_paths if sensitive.exists())
+
 def main():
     parser = argparse.ArgumentParser(description='Launch Claude Code container')
     parser.add_argument('--no-rm', action='store_true', help='Do not remove container after exit')
     parser.add_argument('--profile', default='default', help='Profile to use (default: default)')
+    parser.add_argument('--force', action='store_true', help='Force mounting sensitive directories')
     parser.add_argument('code_dir', nargs='?', default=os.getcwd(), help='Code directory to mount (default: current directory)')
     args = parser.parse_args()
 
@@ -29,6 +40,11 @@ def main():
         print(f"Error: Cannot resolve directory '{args.code_dir}' to absolute path")
         sys.exit(1)
 
+    # Check for sensitive directories
+    if is_sensitive_directory(code_dir) and not args.force:
+        print(f"Cowardly refusing to mount directory '{code_dir}'. Use --force to override.")
+        sys.exit(1)
+
     print("Launching container with:")
     print(f" - Profile: {args.profile}")
     print(f" - Working directory: {code_dir}")
@@ -36,6 +52,8 @@ def main():
         print(" - Container will be preserved after exit")
     else:
         print(" - Container will be removed after exit")
+    if args.force:
+        print(" - Force flag is enabled (protection bypassed)")
 
     # Build docker command
     docker_cmd = [
