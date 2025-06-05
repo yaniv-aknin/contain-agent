@@ -49,6 +49,12 @@ def main():
         # Mount to /root maintaining the same name
         docker_cmd.extend(["-v", f"{profile_path}:/root/{profile_path.name}"])
 
+    # Check for .env file and add it to environment
+    env_file = profile_dir / ".env"
+    if env_file.exists():
+        print(" - Loading environment from .env")
+        docker_cmd.extend(["--env-file", str(env_file)])
+
     # Add the container name and command
     docker_cmd.extend(["contain-agent", "bash"])
 
