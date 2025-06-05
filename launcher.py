@@ -8,7 +8,6 @@ from pathlib import Path
 
 
 def is_sensitive_directory(path: Path) -> bool:
-    """Check if the given path is a sensitive directory that should be protected."""
     sensitive_paths = [
         Path("/"),
         Path("/tmp"),
@@ -21,22 +20,15 @@ def is_sensitive_directory(path: Path) -> bool:
 
 
 def get_profile_paths() -> dict[str, Path]:
-    """Get a dictionary mapping profile names to their absolute paths.
-
-    Searches both the local profiles directory and ~/.contain-agent.
-    Local profiles take precedence over home profiles if there are duplicates.
-    """
     script_dir = Path(__file__).parent.absolute()
     profiles = {}
 
-    # Check local profiles first (they take precedence)
     local_profiles_dir = script_dir / "profiles"
     if local_profiles_dir.exists():
         for profile_dir in local_profiles_dir.iterdir():
             if profile_dir.is_dir():
                 profiles[profile_dir.name] = profile_dir
 
-    # Then check ~/.contain-agent
     home_profiles_dir = Path.home() / ".contain-agent"
     if home_profiles_dir.exists():
         for profile_dir in home_profiles_dir.iterdir():
@@ -65,7 +57,6 @@ def main():
     )
     args = parser.parse_args()
 
-    # Find profile directory
     profiles = get_profile_paths()
     profile_dir = profiles.get(args.profile)
     if not profile_dir:
@@ -75,14 +66,12 @@ def main():
             print(f" - {name}")
         sys.exit(1)
 
-    # Determine the code directory
     try:
         code_dir = Path(args.code_dir).resolve()
     except Exception as e:
         print(f"Error: Cannot resolve directory '{args.code_dir}' to absolute path")
         sys.exit(1)
 
-    # Check for sensitive directories
     if is_sensitive_directory(code_dir) and not args.force:
         print(
             f"Cowardly refusing to mount directory '{code_dir}'. Use --force to override."
@@ -99,7 +88,6 @@ def main():
     if args.force:
         print(" - Force flag is enabled (protection bypassed)")
 
-    # Build docker command
     docker_cmd = [
         "docker",
         "run",
@@ -109,21 +97,16 @@ def main():
         f"{code_dir}:/app",
     ]
 
-    # Add all top-level files and directories from the profile directory as volume mounts
     for profile_path in profile_dir.iterdir():
-        # Mount to /root maintaining the same name
         docker_cmd.extend(["-v", f"{profile_path}:/root/{profile_path.name}"])
 
-    # Check for .env file and add it to environment
     env_file = profile_dir / ".env"
     if env_file.exists():
         print(" - Loading environment from .env")
         docker_cmd.extend(["--env-file", str(env_file)])
 
-    # Add the container name and command
     docker_cmd.extend(["contain-agent", "bash"])
 
-    # Run the container
     try:
         subprocess.run(docker_cmd)
     except KeyboardInterrupt:
