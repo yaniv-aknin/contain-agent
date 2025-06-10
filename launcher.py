@@ -50,6 +50,9 @@ def main():
         "--force", action="store_true", help="Force mounting sensitive directories"
     )
     parser.add_argument(
+        "--user", action="store_true", help="Run as an unprivileged user (see README)"
+    )
+    parser.add_argument(
         "-n",
         "--no-network",
         action="store_true",
@@ -91,6 +94,8 @@ def main():
         print(" - Container will be preserved after exit")
     else:
         print(" - Container will be removed after exit")
+    if args.user:
+        print(" - Running as the app user (1000:1000)")
     if args.force:
         print(" - Force flag is enabled (protection bypassed)")
     if args.no_network:
@@ -102,12 +107,14 @@ def main():
         "-it",
         *([] if args.no_rm else ["--rm"]),
         *(["--network", "none"] if args.no_network else []),
+        *(["--user", "1000:1000"] if args.user else []),
         "-v",
         f"{code_dir}:/app",
     ]
 
     for profile_path in profile_dir.iterdir():
-        docker_cmd.extend(["-v", f"{profile_path}:/root/{profile_path.name}"])
+        home_dir = 'root' if not args.user else 'home/ubuntu'
+        docker_cmd.extend(["-v", f"{profile_path}:/{home_dir}/{profile_path.name}"])
 
     env_file = profile_dir / ".env"
     if env_file.exists():
