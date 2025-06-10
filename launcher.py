@@ -50,6 +50,12 @@ def main():
         "--force", action="store_true", help="Force mounting sensitive directories"
     )
     parser.add_argument(
+        "-n",
+        "--no-network",
+        action="store_true",
+        help="Disable network access for the container",
+    )
+    parser.add_argument(
         "code_dir",
         nargs="?",
         default=os.getcwd(),
@@ -87,12 +93,15 @@ def main():
         print(" - Container will be removed after exit")
     if args.force:
         print(" - Force flag is enabled (protection bypassed)")
+    if args.no_network:
+        print(" - Network access disabled")
 
     docker_cmd = [
         "docker",
         "run",
         "-it",
         *([] if args.no_rm else ["--rm"]),
+        *(["--network", "none"] if args.no_network else []),
         "-v",
         f"{code_dir}:/app",
     ]
