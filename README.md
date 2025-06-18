@@ -2,17 +2,47 @@
 
 A simple tool to launch a container to isolate coding agents like Claude Code or Codex.
 
-## Invocation
+## Setup
 
-This tool simply runs a Docker container with the current directory mounted as `/app`, also mounting any files in the profile into the container's home directory (so, for example, dotfiles for the agentic tool you'll use)
+1. Build the container:
 
-## Build container
+   ```bash
+   docker build -t contain-agent .
+   ```
 
-`docker build -t contain-agent .`
+2. Create an alias to `launcher.py` for easy access:
 
-## (lack of) UID/GID mapping
+   ```bash
+   alias agent='/path/to/launcher.py'
+   ```
 
-The current directory will be mounted without UID/GID mapping; created files will be assigned a platform-dependant owner/group.
+3. Set up authentication by running an agent outside the container first to create authentication files in your home directory (like `.claude`)
 
-* On macOS, typically, this would mean "the host UID/GID, no matter the UID/GID inside the container". This is probably a reasonable behaviour for your usecase.
-* On Linux, typically, this would mean "the container UID/GID". This is probably the more correct behaviour, but also less useful for most scenarios where you'd want contain agent. Send PRs if you want this solved.
+4. Copy those authentication files to a _profile directory_ (like `~/.contain-agent/default/`).
+
+## Usage
+
+Run the launcher to drop into a containerized shell where your current directory is mounted at `/app`:
+
+```bash
+python launcher.py [directory]
+```
+
+The tool mounts your specified directory (or current directory if none specified) into the container at `/app`, and maps profile files from `~/.contain-agent/default/` into the container's home directory. The idea is that the agent is contained, but the profile files are shared and reused across sessions.
+
+### Options
+
+- `--profile <name>`: Use a different profile (default: `default`)
+- `--user`: Run as unprivileged user instead of root
+- `--no-rm`: Keep container after exit
+- `--force`: Override protection for sensitive directories
+- `--no-network`: Disable network access (if your agent doesn't need it)
+
+Additional profiles can be created in `~/.contain-agent/` or in a local `profiles/` directory.
+
+## UID/GID Mapping
+
+Files created will be assigned platform-dependent ownership:
+
+- **macOS**: Host UID/GID (convenient for most use cases)
+- **Linux**: Container UID/GID (more correct but less convenient)
