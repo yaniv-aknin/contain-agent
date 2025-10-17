@@ -1,0 +1,24 @@
+[project]
+name = "contain-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Yaniv Aknin", email = "yaniv@aknin.name" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "typer>=0.19.2",
+]
+
+[project.scripts]
+contain-agent = "contain_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.8.0,<0.9"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.1",
+]

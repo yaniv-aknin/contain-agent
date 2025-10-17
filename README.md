@@ -1,48 +1,62 @@
 # Contain Agent
 
-A simple tool to launch a container to isolate coding agents like Claude Code or Codex.
+A lightweight tool to run AI coding agents (like Claude Code or OpenAI Codex) inside isolated Docker containers.
 
 ## Setup
 
-1. Build the container:
+1. Build the container image:
 
    ```bash
-   docker build -t contain-agent .
+   docker build -t inside-agents .
    ```
 
-2. Create an alias to `launcher.py` for easy access:
+2. Set up authentication:
+
+   Run your agent (e.g., Claude Code) outside the container first to create authentication files in your home directory (like `~/.claude/`).
+
+3. Create a profile directory:
 
    ```bash
-   alias agent='/path/to/launcher.py'
+   mkdir -p ~/.contain-agent/default
    ```
 
-3. Set up authentication by running an agent outside the container first to create authentication files in your home directory (like `.claude`)
+4. Copy authentication files to your profile:
 
-4. Copy those authentication files to a _profile directory_ (like `~/.contain-agent/default/`).
+   ```bash
+   cp -r ~/.claude ~/.contain-agent/default/
+   ```
+
+If you drop a `.env` in your profile it will be loaded in the container.
 
 ## Usage
 
-Run the launcher to drop into a containerized shell where your current directory is mounted at `/app`:
+Launch a containerized shell with your current directory mounted:
 
 ```bash
-python launcher.py [directory]
+contain-agent
 ```
 
-The tool mounts your specified directory (or current directory if none specified) into the container at `/app`, and maps profile files from `~/.contain-agent/default/` into the container's home directory. The idea is that the agent is contained, but the profile files are shared and reused across sessions.
+Or specify a directory to mount:
 
-### Options
+```bash
+contain-agent /path/to/project
+```
 
-- `--profile <name>`: Use a different profile (default: `default`)
-- `--user`: Run as unprivileged user instead of root
-- `--no-rm`: Keep container after exit
-- `--force`: Override protection for sensitive directories
-- `--no-network`: Disable network access (if your agent doesn't need it)
+See `--help` for more options.
 
-Additional profiles can be created in `~/.contain-agent/` or in a local `profiles/` directory.
+## mitmproxy Integration
 
-## UID/GID Mapping
+For inspecting API traffic between the agent and AI services:
 
-Files created will be assigned platform-dependent ownership:
+```bash
+# Start mitmproxy automatically and dump traffic to file
+contain-agent --dump traffic.mitm
 
-- **macOS**: Host UID/GID (convenient for most use cases)
-- **Linux**: Container UID/GID (more correct but less convenient)
+# Configure for external mitmproxy (you manage it yourself)
+contain-agent --proxy
+```
+
+When using mitmproxy, the tool configures:
+
+- OpenAI API: `http://host.rancher-desktop.internal:8081/v1/`
+- Anthropic API: `http://host.rancher-desktop.internal:8082/`
