@@ -12,7 +12,7 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from .mitm import NullContext, ProxyContext, MitmContext
+from .proxy import NullContext, ProxyContext, MitmContext
 
 
 def is_sensitive_directory(path: Path) -> bool:
@@ -152,15 +152,11 @@ def run(
     no_profile: Annotated[
         bool, typer.Option("--no-profile", help="Do not use default profile")
     ] = False,
-    rm: Annotated[
-        bool, typer.Option(help="Remove container after exit")
-    ] = True,
+    rm: Annotated[bool, typer.Option(help="Remove container after exit")] = True,
     force: Annotated[
         bool, typer.Option(help="Force mounting sensitive directories")
     ] = False,
-    mount: Annotated[
-        bool, typer.Option(help="Mount workspace directory")
-    ] = True,
+    mount: Annotated[bool, typer.Option(help="Mount workspace directory")] = True,
     env_file: Annotated[
         Optional[str],
         typer.Option(
