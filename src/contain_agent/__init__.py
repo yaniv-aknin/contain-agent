@@ -63,13 +63,13 @@ def build_docker_command(
     workspace_path: str = None,
     proxy_vars: dict[str, str] = None,
     profile_mounts: list = None,
-    no_rm: bool = False,
+    rm: bool = True,
     env_file_path: Path = None,
 ) -> list:
     """Build the docker run command with appropriate flags."""
     cmd = ["docker", "run"]
 
-    if not no_rm:
+    if rm:
         cmd.append("--rm")
 
     cmd.append("-it")
@@ -150,17 +150,17 @@ def run(
         ),
     ] = None,
     no_profile: Annotated[
-        bool, typer.Option(help="Do not use default profile")
+        bool, typer.Option("--no-profile", help="Do not use default profile")
     ] = False,
-    no_rm: Annotated[
-        bool, typer.Option(help="Do not remove container after exit")
-    ] = False,
+    rm: Annotated[
+        bool, typer.Option(help="Remove container after exit")
+    ] = True,
     force: Annotated[
         bool, typer.Option(help="Force mounting sensitive directories")
     ] = False,
-    no_mount: Annotated[
-        bool, typer.Option(help="Do not mount any workspace directory")
-    ] = False,
+    mount: Annotated[
+        bool, typer.Option(help="Mount workspace directory")
+    ] = True,
     env_file: Annotated[
         Optional[str],
         typer.Option(
@@ -211,7 +211,7 @@ def run(
             raise typer.Exit(1)
 
     workspace_path = None
-    if not no_mount:
+    if mount:
         workspace_arg = workspace if workspace else os.getcwd()
 
         try:
@@ -233,10 +233,10 @@ def run(
         print(f" - Working directory: {workspace_path}")
     else:
         print(" - No workspace mounted")
-    if no_rm:
-        print(" - Container will be preserved after exit")
-    else:
+    if rm:
         print(" - Container will be removed after exit")
+    else:
+        print(" - Container will be preserved after exit")
     if force:
         print(" - Force flag is enabled (protection bypassed)")
 
@@ -259,7 +259,7 @@ def run(
         workspace_path=str(workspace_path) if workspace_path else None,
         proxy_vars=context.env,
         profile_mounts=profile_mounts,
-        no_rm=no_rm,
+        rm=rm,
         env_file_path=env_file_path,
     )
 
