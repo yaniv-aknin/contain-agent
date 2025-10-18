@@ -44,6 +44,11 @@ RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @anthropic-a
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @openai/codex
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @google/gemini-cli
 
+RUN echo '#!/bin/bash\nexec gemini --yolo "$@"' > /home/agent/.local/bin/ygemini && \
+    echo '#!/bin/bash\nexec claude --dangerously-skip-permissions "$@"' > /home/agent/.local/bin/yclaude && \
+    echo '#!/bin/bash\nexec codex --dangerously-bypass-approvals-and-sandbox "$@"' > /home/agent/.local/bin/ycodex && \
+    chmod +x /home/agent/.local/bin/ygemini /home/agent/.local/bin/yclaude /home/agent/.local/bin/ycodex
+
 SHELL ["/bin/bash", "-c"]
 WORKDIR /workspace
 CMD ["/bin/bash"]
