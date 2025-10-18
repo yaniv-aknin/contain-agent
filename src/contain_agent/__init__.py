@@ -65,6 +65,7 @@ def build_docker_command(
     profile_mounts: list = None,
     rm: bool = True,
     env_file_path: Path = None,
+    command: list[str] = None,
 ) -> list:
     """Build the docker run command with appropriate flags."""
     cmd = ["docker", "run"]
@@ -104,6 +105,11 @@ def build_docker_command(
 
     cmd.append(image_name)
 
+    if command:
+        import shlex
+        quoted_command = ' '.join(shlex.quote(arg) for arg in command)
+        cmd.extend(['bash', '-l', '-i', '-c', quoted_command])
+
     return cmd
 
 
@@ -114,12 +120,12 @@ def main():
     app()
 
 
-@app.command()
+@app.command(context_settings={"allow_interspersed_args": False})
 def run(
-    workspace: Annotated[
-        Optional[str],
+    args: Annotated[
+        Optional[list[str]],
         typer.Argument(
-            help="Workspace directory to mount (default: current directory)"
+            help="[MOUNT_DIR] [COMMAND...] - Mount directory (optional) and command to run in container"
         ),
     ] = None,
     dump: Annotated[
@@ -171,6 +177,22 @@ def run(
         print("ERROR: --dump and --proxy are mutually exclusive", file=sys.stderr)
         raise typer.Exit(1)
 
+    workspace_arg = None
+    command_args = []
+
+    if args:
+        if mount:
+            if len(args) >= 1:
+                first_arg = args[0]
+                workspace_arg = first_arg
+                command_args = args[1:]
+        else:
+            command_args = args
+
+    if workspace_arg and not Path(workspace_arg).exists():
+        print(f"{workspace_arg} does not exist; perhaps you forgot to use --no-mount?")
+        raise typer.Exit(1)
+
     profile_dir = None
     profile_mounts = None
     env_file_path = None
@@ -208,7 +230,8 @@ def run(
 
     workspace_path = None
     if mount:
-        workspace_arg = workspace if workspace else os.getcwd()
+        if not workspace_arg:
+            workspace_arg = os.getcwd()
 
         try:
             workspace_path = Path(workspace_arg).resolve()
@@ -229,6 +252,8 @@ def run(
         print(f" - Working directory: {workspace_path}")
     else:
         print(" - No workspace mounted")
+    if command_args:
+        print(f" - Command: {' '.join(command_args)}")
     if rm:
         print(" - Container will be removed after exit")
     else:
@@ -257,6 +282,7 @@ def run(
         profile_mounts=profile_mounts,
         rm=rm,
         env_file_path=env_file_path,
+        command=command_args if command_args else None,
     )
 
     print(f"\nStarting container: {' '.join(docker_cmd)}\n")
