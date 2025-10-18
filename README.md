@@ -7,7 +7,7 @@ A lightweight tool to run AI coding agents (like Claude Code or OpenAI Codex) in
 1. Build the container image:
 
    ```bash
-   docker build -t inside-agents .
+   docker build -t contain-agent .
    ```
 
 2. Set up authentication:

@@ -14,6 +14,8 @@ from typing_extensions import Annotated
 
 from .proxy import NullContext, ProxyContext, MitmContext
 
+DEFAULT_IMAGE = "contain-agent"
+
 
 def is_sensitive_directory(path: Path) -> bool:
     """Check if a path is a sensitive directory that should not be mounted."""
@@ -113,7 +115,7 @@ def build_docker_command(
     return cmd
 
 
-app = typer.Typer(help="Run interactive shell with inside-agents container")
+app = typer.Typer(help=f"Run interactive shell with {DEFAULT_IMAGE} container")
 
 
 def main():
@@ -169,9 +171,9 @@ def run(
             help="Path to .env file to load (default: <profile>/.env if profile is used)"
         ),
     ] = None,
-    image: Annotated[str, typer.Option(help="Docker image name")] = "inside-agents",
+    image: Annotated[str, typer.Option(help="Docker image name")] = DEFAULT_IMAGE,
 ):
-    """Run interactive shell with inside-agents container."""
+    """Run coding agents in a container."""
 
     if dump and proxy:
         print("ERROR: --dump and --proxy are mutually exclusive", file=sys.stderr)
