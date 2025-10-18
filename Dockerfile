@@ -24,24 +24,25 @@ RUN apt-get update && apt-get install -y \
     findutils \
     file \
     fd-find \
-    && mkdir -p /etc/apt/keyrings \
-    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update \
-    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
-
-RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin bash
-RUN uv python install
-
-RUN npm install -g @anthropic-ai/claude-code
-RUN npm install -g @openai/codex
 
 RUN useradd -m -s /bin/bash -u 1001 agent
 
 RUN mkdir -p /workspace && chown agent:agent /workspace
 
 USER agent
+
+RUN curl -LsSf https://astral.sh/uv/install.sh | bash
+RUN /home/agent/.local/bin/uv python install
+
+RUN curl -fsSL https://fnm.vercel.app/install | bash
+RUN /home/agent/.local/share/fnm/fnm install 22
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
+
+RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @anthropic-ai/claude-code
+RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @openai/codex
+RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @google/gemini-cli
 
 SHELL ["/bin/bash", "-c"]
 WORKDIR /workspace
