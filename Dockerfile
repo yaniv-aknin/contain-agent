@@ -24,6 +24,26 @@ RUN apt-get update && apt-get install -y \
     findutils \
     file \
     fd-find \
+    net-tools \
+    lsof \
+    iproute2 \
+    strace \
+    tcpdump \
+    dnsutils \
+    traceroute \
+    miller \
+    sed \
+    gawk \
+    diffutils \
+    gzip \
+    bzip2 \
+    xz-utils \
+    p7zip-full \
+    sysstat \
+    ltrace \
+    xxd \
+    man-db \
+    socat \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash -u 1001 agent
