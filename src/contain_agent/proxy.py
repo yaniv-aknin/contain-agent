@@ -1,8 +1,18 @@
 import time
 import sys
 import subprocess
+import socket
 from pathlib import Path
 from shutil import which
+
+
+def find_free_port() -> int:
+    """Find a free port on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+    return port
 
 
 class NullContext:
@@ -50,10 +60,15 @@ class MitmContext(ProxyContext):
         mitmproxy_dir: Path,
         output=sys.stderr,
     ):
-        super().__init__(proxy_host, mitmproxy_dir)
         self.dump_file = dump_file
         self.output = output
         self.process = None
+        self.allocated_port = find_free_port()
+
+        proxy_host_name = proxy_host.split(":")[0]
+        updated_proxy_host = f"{proxy_host_name}:{self.allocated_port}"
+
+        super().__init__(updated_proxy_host, mitmproxy_dir)
 
     def print(self, *a, **kw):
         print(*a, **kw, file=self.output)
@@ -71,9 +86,9 @@ class MitmContext(ProxyContext):
 
     def __enter__(self):
         cmd = self.find_mitmdump()
-        cmd.extend(["-w", self.dump_file])
+        cmd.extend(["-p", str(self.allocated_port), "-w", self.dump_file])
 
-        self.print(f"Starting mitmproxy: {' '.join(cmd)}")
+        self.print(f"Starting mitmproxy on port {self.allocated_port}: {' '.join(cmd)}")
         self.process = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
