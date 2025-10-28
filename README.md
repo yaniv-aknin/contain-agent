@@ -42,7 +42,7 @@ Or specify a directory to mount:
 contain-agent /path/to/project
 ```
 
-See `--help` for more options.
+See `--help` for more options. See also [usage instructions](USAGE.md) geared at agents, i.e., helping agents invoke `contain-agent` to research agents.
 
 ## mitmproxy Integration
 
