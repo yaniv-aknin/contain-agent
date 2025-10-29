@@ -105,14 +105,8 @@ RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @anthropic-a
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @openai/codex
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @google/gemini-cli
 
-# y* scripts run in yolo mode, a* scripts run in automated yolo mode
-RUN echo '#!/bin/bash\nexec gemini --yolo "$@"' > /home/agent/.local/bin/ygemini && \
-    echo '#!/bin/bash\nexec claude --dangerously-skip-permissions "$@"' > /home/agent/.local/bin/yclaude && \
-    echo '#!/bin/bash\nexec codex --dangerously-bypass-approvals-and-sandbox "$@"' > /home/agent/.local/bin/ycodex && \
-    echo '#!/bin/bash\nexec gemini --yolo "$@"' > /home/agent/.local/bin/agemini && \
-    echo '#!/bin/bash\nexec claude --print --verbose --print-format stream-json --dangerously-skip-permissions "$@"' > /home/agent/.local/bin/aclaude && \
-    echo '#!/bin/bash\nexec codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json "$@"' > /home/agent/.local/bin/acodex && \
-    chmod +x /home/agent/.local/bin/ygemini /home/agent/.local/bin/yclaude /home/agent/.local/bin/ycodex /home/agent/.local/bin/agemini /home/agent/.local/bin/aclaude /home/agent/.local/bin/acodex
+COPY --chown=agent:agent scripts/* /home/agent/.local/bin/
+RUN chmod +x /home/agent/.local/bin/*
 
 SHELL ["/bin/bash", "-c"]
 WORKDIR /workspace

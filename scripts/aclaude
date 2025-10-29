@@ -1,0 +1,2 @@
+#!/bin/bash
+exec claude --print --verbose --output-format stream-json --dangerously-skip-permissions "$@"
