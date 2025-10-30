@@ -1,0 +1,2 @@
+#!/bin/bash
+exec cursor-agent --print --output-format stream-json --force --approve-mcps "$@"

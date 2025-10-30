@@ -104,6 +104,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @anthropic-ai/claude-code
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @openai/codex
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @google/gemini-cli
+RUN curl https://cursor.com/install -fsSL | bash
 
 COPY --chown=agent:agent scripts/* /home/agent/.local/bin/
 RUN chmod +x /home/agent/.local/bin/*

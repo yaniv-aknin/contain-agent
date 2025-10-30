@@ -4,7 +4,7 @@ A containerized environment for running AI coding agents with traffic capture ca
 
 ## What it does
 
-- Runs AI coding agents (Claude, Gemini, Codex) in isolated Docker containers
+- Runs AI coding agents (such as Claude or Gemini) in isolated Docker containers
 - Mounts a workspace directory and agent configuration files
 - Optionally captures all network traffic via mitmproxy for analysis
 
@@ -21,7 +21,7 @@ contain-agent . ls -la                     # Run ls in current dir
 
 ## Automated agent wrappers (a\* scripts)
 
-The container has pre-installed wrappers that bypass approval prompts for automated execution. Run them as `aclaude <prompt>`, `acodex <prompt>` or `agemini <prompt>`.
+The container has pre-installed wrappers that bypass approval prompts for automated execution.
 
 ## Traffic capture
 
@@ -55,13 +55,11 @@ tmux split-window -v -t multi
 # Run different agents in each pane
 tmux send-keys -t multi:0.0 'contain-agent --dump claude.dump . aclaude "task"' C-m
 tmux send-keys -t multi:0.1 'contain-agent --dump gemini.dump . agemini "task"' C-m
-tmux send-keys -t multi:0.2 'contain-agent --dump codex.dump . acodex "task"' C-m
 
 # Wait for completion, then capture output
 sleep 10
 tmux capture-pane -t multi:0.0 -p
 tmux capture-pane -t multi:0.1 -p
-tmux capture-pane -t multi:0.2 -p
 
 # Cleanup
 tmux kill-session -t multi
