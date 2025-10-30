@@ -12,7 +12,7 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from .proxy import NullContext, ProxyContext, MitmContext
+from .proxy import NullContext, ProxyContext, MitmContext, TransparentProxyContext
 
 DEFAULT_IMAGE = "contain-agent"
 
@@ -68,6 +68,7 @@ def build_docker_command(
     rm: bool = True,
     env_file_path: Path = None,
     command: list[str] = None,
+    net_admin: bool = True,
 ) -> list:
     """Build the docker run command with appropriate flags."""
     cmd = ["docker", "run"]
@@ -76,6 +77,9 @@ def build_docker_command(
         cmd.append("--rm")
 
     cmd.append("-it")
+
+    if net_admin:
+        cmd.extend(["--cap-add", "NET_ADMIN"])
 
     if env_file_path and env_file_path.exists():
         cmd.extend(["--env-file", str(env_file_path)])
@@ -139,6 +143,12 @@ def run(
             help="Configure proxy settings without starting mitmdump (you run mitmproxy yourself)"
         ),
     ] = False,
+    transparent: Annotated[
+        bool,
+        typer.Option(
+            help="Enable transparent proxying with iptables (does not set HTTP_PROXY/all_proxy)"
+        ),
+    ] = False,
     proxy_host: Annotated[
         str,
         typer.Option(
@@ -172,12 +182,34 @@ def run(
         ),
     ] = None,
     image: Annotated[str, typer.Option(help="Docker image name")] = DEFAULT_IMAGE,
+    net_admin: Annotated[
+        bool, typer.Option(help="Grant NET_ADMIN capability (allows iptables)")
+    ] = False,
+    no_net_admin: Annotated[
+        bool, typer.Option(help="Explicitly disable NET_ADMIN capability")
+    ] = False,
 ):
     """Run coding agents in a container."""
 
     if dump and proxy:
         print("ERROR: --dump and --proxy are mutually exclusive", file=sys.stderr)
         raise typer.Exit(1)
+
+    if transparent and dump:
+        print("ERROR: --transparent and --dump are mutually exclusive", file=sys.stderr)
+        raise typer.Exit(1)
+
+    if transparent and proxy:
+        print("ERROR: --transparent and --proxy are mutually exclusive", file=sys.stderr)
+        raise typer.Exit(1)
+
+    if transparent and no_net_admin:
+        print("ERROR: --transparent requires NET_ADMIN capability, cannot use with --no-net-admin", file=sys.stderr)
+        raise typer.Exit(1)
+
+    effective_net_admin = net_admin or transparent
+    if no_net_admin:
+        effective_net_admin = False
 
     workspace_arg = None
     command_args = []
@@ -274,6 +306,11 @@ def run(
             proxy_host=proxy_host,
             mitmproxy_dir=mitmproxy_dir,
         )
+    elif transparent:
+        context = TransparentProxyContext(
+            proxy_host=proxy_host,
+            mitmproxy_dir=mitmproxy_dir,
+        )
     else:
         context = NullContext()
 
@@ -285,6 +322,7 @@ def run(
         rm=rm,
         env_file_path=env_file_path,
         command=command_args if command_args else None,
+        net_admin=effective_net_admin,
     )
 
     print(f"\nStarting container: {' '.join(docker_cmd)}\n")

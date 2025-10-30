@@ -1,0 +1,63 @@
+#!/bin/bash
+set -e
+
+if [ "$EUID" -ne 0 ]; then
+    echo "ERROR: This script must be run as root" >&2
+    exit 1
+fi
+
+if [ ! -e /proc/self/status ] || ! grep -q "CapEff:.*0000000000003000" /proc/self/status; then
+    if ! capsh --print 2>/dev/null | grep -q "cap_net_admin"; then
+        echo "ERROR: NET_ADMIN capability required (run container with --cap-add=NET_ADMIN)" >&2
+        exit 1
+    fi
+fi
+
+PROXY_PORT=8080
+PROXY_HOST="127.0.0.1"
+
+if [ -n "$HTTP_PROXY" ]; then
+    PROXY_HOST=$(echo "$HTTP_PROXY" | sed -E 's|^https?://||' | cut -d: -f1)
+    PROXY_PORT_PARSED=$(echo "$HTTP_PROXY" | sed -E 's|^https?://||' | cut -d: -f2 | cut -d/ -f1)
+    if [ -n "$PROXY_PORT_PARSED" ] && [ "$PROXY_PORT_PARSED" != "$PROXY_HOST" ]; then
+        PROXY_PORT=$PROXY_PORT_PARSED
+    fi
+
+    # Resolve hostname to IP if needed (iptables requires IP addresses)
+    if ! echo "$PROXY_HOST" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        RESOLVED_IP=$(getent hosts "$PROXY_HOST" | awk '{ print $1 ; exit }')
+        if [ -z "$RESOLVED_IP" ]; then
+            echo "ERROR: Failed to resolve hostname: $PROXY_HOST" >&2
+            exit 1
+        fi
+        PROXY_HOST="$RESOLVED_IP"
+    fi
+fi
+
+case "$1" in
+    start)
+        iptables -t nat -A OUTPUT -p tcp -m owner ! --uid-owner 0 -m tcp --dport 80 -j DNAT --to-destination ${PROXY_HOST}:${PROXY_PORT}
+        iptables -t nat -A OUTPUT -p tcp -m owner ! --uid-owner 0 -m tcp --dport 443 -j DNAT --to-destination ${PROXY_HOST}:${PROXY_PORT}
+        echo "Transparent proxy enabled (80,443 -> ${PROXY_HOST}:${PROXY_PORT})"
+        ;;
+    enforce)
+        iptables -t nat -A OUTPUT -p tcp -m owner ! --uid-owner 0 -m tcp --dport 80 -j DNAT --to-destination ${PROXY_HOST}:${PROXY_PORT}
+        iptables -t nat -A OUTPUT -p tcp -m owner ! --uid-owner 0 -m tcp --dport 443 -j DNAT --to-destination ${PROXY_HOST}:${PROXY_PORT}
+        iptables -A OUTPUT -o lo -j ACCEPT
+        iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+        iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+        iptables -A OUTPUT -d ${PROXY_HOST} -p tcp --dport ${PROXY_PORT} -j ACCEPT
+        iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        iptables -A OUTPUT -m owner ! --uid-owner 0 -j DROP
+        echo "Transparent proxy enforced (80,443 -> ${PROXY_HOST}:${PROXY_PORT}, DNS and ${PROXY_HOST}:${PROXY_PORT} allowed outbound)"
+        ;;
+    stop)
+        iptables -t nat -F OUTPUT 2>/dev/null || true
+        iptables -F OUTPUT 2>/dev/null || true
+        echo "Transparent proxy disabled, enforcement removed"
+        ;;
+    *)
+        echo "Usage: $0 {start|enforce|stop}" >&2
+        exit 1
+        ;;
+esac

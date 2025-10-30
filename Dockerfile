@@ -3,6 +3,8 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production
 RUN apt-get update && apt-get install -y \
+    sudo \
+    iptables \
     curl \
     git \
     bash \
@@ -91,6 +93,14 @@ RUN useradd -m -s /bin/bash -u 1001 agent
 
 RUN mkdir -p /workspace && chown agent:agent /workspace
 
+COPY scripts/xproxy /usr/local/bin/xproxy
+RUN chmod 755 /usr/local/bin/xproxy && \
+    chown root:root /usr/local/bin/xproxy
+
+RUN echo 'Defaults!/usr/local/bin/xproxy env_keep += "HTTP_PROXY"' > /etc/sudoers.d/xproxy && \
+    echo 'agent ALL=(root) NOPASSWD: /usr/local/bin/xproxy *' >> /etc/sudoers.d/xproxy && \
+    chmod 0440 /etc/sudoers.d/xproxy
+
 USER agent
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | bash
@@ -106,7 +116,11 @@ RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @openai/code
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @google/gemini-cli
 RUN curl https://cursor.com/install -fsSL | bash
 
-COPY --chown=agent:agent scripts/* /home/agent/.local/bin/
+RUN echo 'if [ -n "$TRANSPARENT_PROXY" ] && command -v xproxy &> /dev/null; then' >> /home/agent/.bashrc && \
+    echo '    sudo xproxy start' >> /home/agent/.bashrc && \
+    echo 'fi' >> /home/agent/.bashrc
+
+COPY --chown=agent:agent scripts/bin/* /home/agent/.local/bin/
 RUN chmod +x /home/agent/.local/bin/*
 
 SHELL ["/bin/bash", "-c"]

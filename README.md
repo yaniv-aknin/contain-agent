@@ -52,11 +52,10 @@ For inspecting API traffic between the agent and AI services:
 # Start mitmproxy automatically and dump traffic to file
 contain-agent --dump traffic.mitm
 
-# Configure for external mitmproxy (you manage it yourself)
+# Configure for manually started proxy on port 8080
 contain-agent --proxy
+
+# Configure for transparent proxying on port 8080
 ```
 
-When using mitmproxy, the tool configures:
-
-- OpenAI API: `http://host.rancher-desktop.internal:8081/v1/`
-- Anthropic API: `http://host.rancher-desktop.internal:8082/`
+Depending on the agent communication protocol, you may want to stream and store bodies with `mitmproxy --set stream_large_bodies=1 --set store_streamed_bodies=true`.

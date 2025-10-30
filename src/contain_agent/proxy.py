@@ -52,6 +52,31 @@ class ProxyContext(NullContext):
         }
 
 
+class TransparentProxyContext(NullContext):
+    def __init__(self, proxy_host: str, mitmproxy_dir: Path):
+        proxy_host_part, proxy_port = proxy_host.split(":")
+        self.proxy_host = proxy_host_part
+        self.proxy_port = int(proxy_port)
+        self.mitmproxy_dir = mitmproxy_dir
+        self.proxy_url = f"http://{proxy_host_part}:{proxy_port}"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
+
+    @property
+    def env(self) -> dict[str, str]:
+        cert_file = self.mitmproxy_dir / "mitmproxy-ca-cert.pem"
+        return {
+            "SSL_CERT_FILE": str(cert_file),
+            "NODE_EXTRA_CA_CERTS": str(cert_file),
+            "TRANSPARENT_PROXY": "1",
+            "HTTP_PROXY": self.proxy_url,
+        }
+
+
 class MitmContext(ProxyContext):
     def __init__(
         self,
