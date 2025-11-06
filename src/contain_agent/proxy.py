@@ -15,123 +15,64 @@ def find_free_port() -> int:
     return port
 
 
-class NullContext:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        pass
-
-    @property
-    def env(self) -> dict[str, str]:
-        return {}
+def get_proxy_env(proxy_host: str, proxy_port: int, cert_file: Path) -> dict[str, str]:
+    proxy_url = f"http://{proxy_host}:{proxy_port}"
+    return {
+        "SSL_CERT_FILE": str(cert_file),
+        "NODE_EXTRA_CA_CERTS": str(cert_file),
+        "HTTP_PROXY": proxy_url,
+        "all_proxy": proxy_url,
+    }
 
 
-class ProxyContext(NullContext):
-    def __init__(self, proxy_host: str, mitmproxy_dir: Path):
-        proxy_host, proxy_port = proxy_host.split(":")
-        self.proxy_host = proxy_host
-        self.proxy_port = int(proxy_port)
-        self.mitmproxy_dir = mitmproxy_dir
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        pass
-
-    @property
-    def env(self) -> dict[str, str]:
-        cert_file = self.mitmproxy_dir / "mitmproxy-ca-cert.pem"
-        proxy_url = f"http://{self.proxy_host}:{self.proxy_port}"
-        return {
-            "SSL_CERT_FILE": str(cert_file),
-            "NODE_EXTRA_CA_CERTS": str(cert_file),
-            "HTTP_PROXY": proxy_url,
-            "all_proxy": proxy_url,
-        }
+def get_transparent_proxy_env(proxy_host: str, proxy_port: int, cert_file: Path) -> dict[str, str]:
+    proxy_url = f"http://{proxy_host}:{proxy_port}"
+    return {
+        "SSL_CERT_FILE": str(cert_file),
+        "NODE_EXTRA_CA_CERTS": str(cert_file),
+        "TRANSPARENT_PROXY": "1",
+        "HTTP_PROXY": proxy_url,
+    }
 
 
-class TransparentProxyContext(NullContext):
-    def __init__(self, proxy_host: str, mitmproxy_dir: Path):
-        proxy_host_part, proxy_port = proxy_host.split(":")
-        self.proxy_host = proxy_host_part
-        self.proxy_port = int(proxy_port)
-        self.mitmproxy_dir = mitmproxy_dir
-        self.proxy_url = f"http://{proxy_host_part}:{proxy_port}"
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        pass
-
-    @property
-    def env(self) -> dict[str, str]:
-        cert_file = self.mitmproxy_dir / "mitmproxy-ca-cert.pem"
-        return {
-            "SSL_CERT_FILE": str(cert_file),
-            "NODE_EXTRA_CA_CERTS": str(cert_file),
-            "TRANSPARENT_PROXY": "1",
-            "HTTP_PROXY": self.proxy_url,
-        }
+def find_mitmdump() -> list[str]:
+    mitmdump_path = Path("~/.contain-agent/mitmdump").expanduser()
+    if mitmdump_path.exists():
+        return [mitmdump_path.as_posix()]
+    if which("mitmdump"):
+        return ["mitmdump"]
+    if which("uvx"):
+        return ["uvx", "--from", "mitmproxy", "mitmdump"]
+    raise RuntimeError("mitmdump not found")
 
 
-class MitmContext(ProxyContext):
-    def __init__(
-        self,
-        dump_file: str,
-        proxy_host: str,
-        mitmproxy_dir: Path,
-        output=sys.stderr,
-    ):
-        self.dump_file = dump_file
-        self.output = output
-        self.process = None
-        self.allocated_port = find_free_port()
+def start_mitmdump(dump_file: str, port: int = None, output=sys.stderr):
+    if port is None:
+        port = find_free_port()
 
-        proxy_host_name = proxy_host.split(":")[0]
-        updated_proxy_host = f"{proxy_host_name}:{self.allocated_port}"
+    cmd = find_mitmdump()
+    cmd.extend(["-p", str(port), "-w", dump_file])
 
-        super().__init__(updated_proxy_host, mitmproxy_dir)
+    print(f"Starting mitmproxy on port {port}: {' '.join(cmd)}", file=output)
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
 
-    def print(self, *a, **kw):
-        print(*a, **kw, file=self.output)
+    time.sleep(1)
 
-    @staticmethod
-    def find_mitmdump() -> list[str]:
-        mitmdump_path = Path("~/.contain-agent/mitmdump").expanduser()
-        if mitmdump_path.exists():
-            return [mitmdump_path.as_posix()]
-        if which("mitmdump"):
-            return ["mitmdump"]
-        if which("uvx"):
-            return ["uvx", "--from", "mitmproxy", "mitmdump"]
-        raise RuntimeError("mitmdump not found")
+    if process.poll() is not None:
+        raise RuntimeError("mitmdump failed to start")
 
-    def __enter__(self):
-        cmd = self.find_mitmdump()
-        cmd.extend(["-p", str(self.allocated_port), "-w", self.dump_file])
+    print(f"mitmdump started with PID {process.pid}", file=output)
+    return process, port
 
-        self.print(f"Starting mitmproxy on port {self.allocated_port}: {' '.join(cmd)}")
-        self.process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
 
-        time.sleep(1)
-
-        if self.process.poll() is not None:
-            raise RuntimeError("mitmdump failed to start")
-
-        self.print(f"mitmdump started with PID {self.process.pid}")
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.print("\nStopping mitmproxy...")
-        self.process.terminate()
-        try:
-            self.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.print("Force killing mitmproxy...")
-            self.process.kill()
-        self.print(f"Traffic dump saved to {self.dump_file}")
+def stop_mitmdump(process, dump_file: str, output=sys.stderr):
+    print("\nStopping mitmproxy...", file=output)
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        print("Force killing mitmproxy...", file=output)
+        process.kill()
+    print(f"Traffic dump saved to {dump_file}", file=output)

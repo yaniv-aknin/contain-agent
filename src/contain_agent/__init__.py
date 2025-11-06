@@ -12,7 +12,13 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from .proxy import NullContext, ProxyContext, MitmContext, TransparentProxyContext
+from .proxy import (
+    find_free_port,
+    get_proxy_env,
+    get_transparent_proxy_env,
+    start_mitmdump,
+    stop_mitmdump,
+)
 
 DEFAULT_IMAGE = "contain-agent"
 
@@ -69,6 +75,7 @@ def build_docker_command(
     env_file_path: Path = None,
     command: list[str] = None,
     net_admin: bool = True,
+    cert_dir: Path = None,
 ) -> list:
     """Build the docker run command with appropriate flags."""
     cmd = ["docker", "run"]
@@ -85,13 +92,12 @@ def build_docker_command(
         cmd.extend(["--env-file", str(env_file_path)])
         print(f" - Loading environment from {env_file_path}")
 
-    if proxy_vars:
-        mitmproxy_dir = Path.home() / ".mitmproxy"
-        cmd.extend(["-v", f"{mitmproxy_dir}:/home/agent/.mitmproxy:ro"])
+    if proxy_vars and cert_dir:
+        cmd.extend(["-v", f"{cert_dir}:/home/agent/.certs:ro"])
 
         for env_var, value in proxy_vars.items():
             container_value = value.replace(
-                str(mitmproxy_dir), "/home/agent/.mitmproxy"
+                str(cert_dir), "/home/agent/.certs"
             )
             cmd.extend(["-e", f"{env_var}={container_value}"])
 
@@ -135,32 +141,32 @@ def run(
         ),
     ] = None,
     dump: Annotated[
-        Optional[str], typer.Option(help="Enable mitmproxy and dump traffic to FILE")
+        Optional[str], typer.Option(help="Start mitmdump and dump traffic to FILE")
     ] = None,
-    proxy: Annotated[
-        bool,
+    proxy_type: Annotated[
+        Optional[str],
         typer.Option(
-            help="Configure proxy settings without starting mitmdump (you run mitmproxy yourself)"
+            help="Proxy type: 'http' for HTTP_PROXY env vars, 'transparent' for transparent proxying with xproxy"
         ),
-    ] = False,
-    transparent: Annotated[
-        bool,
-        typer.Option(
-            help="Enable transparent proxying with iptables (does not set HTTP_PROXY/all_proxy)"
-        ),
-    ] = False,
+    ] = None,
     proxy_host: Annotated[
         str,
         typer.Option(
-            help="Proxy host to use (default: host.rancher-desktop.internal:8080)"
+            help="Proxy hostname (default: host.rancher-desktop.internal)"
         ),
-    ] = "host.rancher-desktop.internal:8080",
-    mitmproxy_dir: Annotated[
+    ] = "host.rancher-desktop.internal",
+    proxy_port: Annotated[
+        Optional[int],
+        typer.Option(
+            help="Proxy port to use (default: 8080)"
+        ),
+    ] = None,
+    ca_cert: Annotated[
         Optional[Path],
         typer.Option(
-            help="Directory to store mitmproxy certificates (default: ~/.mitmproxy)"
+            help="CA certificate file for proxy HTTPS interception (default: ~/.mitmproxy/mitmproxy-ca-cert.pem)"
         ),
-    ] = Path.home() / ".mitmproxy",
+    ] = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.pem",
     profile: Annotated[
         Optional[str],
         typer.Option(
@@ -191,23 +197,26 @@ def run(
 ):
     """Run coding agents in a container."""
 
-    if dump and proxy:
-        print("ERROR: --dump and --proxy are mutually exclusive", file=sys.stderr)
+    if dump is not None and proxy_port is None:
+        proxy_port = find_free_port()
+
+    use_proxy = dump is not None or proxy_port is not None or proxy_type is not None
+
+    if use_proxy and proxy_type is None:
+        proxy_type = "http"
+
+    if use_proxy and proxy_port is None:
+        proxy_port = 8080
+
+    if proxy_type is not None and proxy_type not in ("http", "transparent"):
+        print(f"ERROR: --proxy-type must be 'http' or 'transparent', got '{proxy_type}'", file=sys.stderr)
         raise typer.Exit(1)
 
-    if transparent and dump:
-        print("ERROR: --transparent and --dump are mutually exclusive", file=sys.stderr)
+    if proxy_type == "transparent" and no_net_admin:
+        print("ERROR: --proxy-type transparent requires NET_ADMIN capability, cannot use with --no-net-admin", file=sys.stderr)
         raise typer.Exit(1)
 
-    if transparent and proxy:
-        print("ERROR: --transparent and --proxy are mutually exclusive", file=sys.stderr)
-        raise typer.Exit(1)
-
-    if transparent and no_net_admin:
-        print("ERROR: --transparent requires NET_ADMIN capability, cannot use with --no-net-admin", file=sys.stderr)
-        raise typer.Exit(1)
-
-    effective_net_admin = net_admin or transparent
+    effective_net_admin = net_admin or (proxy_type == "transparent")
     if no_net_admin:
         effective_net_admin = False
 
@@ -295,49 +304,52 @@ def run(
     if force:
         print(" - Force flag is enabled (protection bypassed)")
 
-    if dump:
-        context = MitmContext(
-            proxy_host=proxy_host,
-            mitmproxy_dir=mitmproxy_dir,
-            dump_file=dump,
-        )
-    elif proxy:
-        context = ProxyContext(
-            proxy_host=proxy_host,
-            mitmproxy_dir=mitmproxy_dir,
-        )
-    elif transparent:
-        context = TransparentProxyContext(
-            proxy_host=proxy_host,
-            mitmproxy_dir=mitmproxy_dir,
-        )
-    else:
-        context = NullContext()
+    mitm_process = None
+    proxy_vars = {}
+    cert_dir = None
+
+    if use_proxy:
+        if not ca_cert.exists():
+            print(f"ERROR: CA certificate not found at {ca_cert}")
+            print("Please run 'mitmproxy' once to generate certificates, or specify --ca-cert")
+            raise typer.Exit(1)
+
+        cert_dir = ca_cert.parent
+        container_cert_path = Path("/home/agent/.certs") / ca_cert.name
+
+        if dump:
+            mitm_process, actual_port = start_mitmdump(dump, proxy_port)
+        else:
+            actual_port = proxy_port
+
+        if proxy_type == "http":
+            proxy_vars = get_proxy_env(proxy_host, actual_port, container_cert_path)
+        elif proxy_type == "transparent":
+            proxy_vars = get_transparent_proxy_env(proxy_host, actual_port, container_cert_path)
 
     docker_cmd = build_docker_command(
         image,
         workspace_path=str(workspace_path) if workspace_path else None,
-        proxy_vars=context.env,
+        proxy_vars=proxy_vars if proxy_vars else None,
         profile_mounts=profile_mounts,
         rm=rm,
         env_file_path=env_file_path,
         command=command_args if command_args else None,
         net_admin=effective_net_admin,
+        cert_dir=cert_dir,
     )
 
     print(f"\nStarting container: {' '.join(docker_cmd)}\n")
 
     try:
-        with context:
-            if not mitmproxy_dir.exists():
-                print(
-                    f"ERROR: {mitmproxy_dir} directory not found. Please run 'mitmproxy' once to generate certificates."
-                )
-                raise typer.Exit(1)
-            result = subprocess.run(docker_cmd)
+
+        result = subprocess.run(docker_cmd)
         exit_code = result.returncode
     except KeyboardInterrupt:
         print("\nInterrupted by user")
         exit_code = 130
+    finally:
+        if mitm_process:
+            stop_mitmdump(mitm_process, dump)
 
     raise typer.Exit(exit_code)
