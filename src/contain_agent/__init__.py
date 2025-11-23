@@ -141,8 +141,17 @@ def run(
         ),
     ] = None,
     dump: Annotated[
-        Optional[str], typer.Option(help="Start mitmdump and dump traffic to FILE")
+        Optional[str], typer.Option(help="Start proxy and dump traffic: [executable:]file")
     ] = None,
+    dump_file: Annotated[
+        Optional[str], typer.Option(help="File to dump traffic to")
+    ] = None,
+    dump_executable: Annotated[
+        str,
+        typer.Option(
+            help="Executable to use for dumping (default: mitmdump)"
+        ),
+    ] = "mitmdump",
     proxy_type: Annotated[
         Optional[str],
         typer.Option(
@@ -197,10 +206,26 @@ def run(
 ):
     """Run coding agents in a container."""
 
-    if dump is not None and proxy_port is None:
+    if dump is not None:
+        if ":" in dump:
+            exec_name, file_name = dump.split(":", 1)
+            if dump_file is None:
+                dump_file = file_name
+            if dump_executable == "mitmdump":
+                dump_executable = exec_name
+        else:
+            if dump_file is None:
+                dump_file = dump
+
+    if dump is None and dump_file is None:
+        if dump_executable != "mitmdump":
+            print("ERROR: --dump-executable requires --dump or --dump-file to be specified", file=sys.stderr)
+            raise typer.Exit(1)
+
+    if dump_file is not None and proxy_port is None:
         proxy_port = find_free_port()
 
-    use_proxy = dump is not None or proxy_port is not None or proxy_type is not None
+    use_proxy = dump_file is not None or proxy_port is not None or proxy_type is not None
 
     if use_proxy and proxy_type is None:
         proxy_type = "http"
@@ -317,8 +342,8 @@ def run(
         cert_dir = ca_cert.parent
         container_cert_path = Path("/home/agent/.certs") / ca_cert.name
 
-        if dump:
-            mitm_process, actual_port = start_mitmdump(dump, proxy_port)
+        if dump_file:
+            mitm_process, actual_port = start_mitmdump(dump_file, proxy_port, dump_executable)
         else:
             actual_port = proxy_port
 
@@ -350,6 +375,6 @@ def run(
         exit_code = 130
     finally:
         if mitm_process:
-            stop_mitmdump(mitm_process, dump)
+            stop_mitmdump(mitm_process, dump_file)
 
     raise typer.Exit(exit_code)

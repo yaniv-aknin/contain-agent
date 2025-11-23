@@ -35,25 +35,31 @@ def get_transparent_proxy_env(proxy_host: str, proxy_port: int, cert_file: Path)
     }
 
 
-def find_mitmdump() -> list[str]:
-    mitmdump_path = Path("~/.contain-agent/mitmdump").expanduser()
-    if mitmdump_path.exists():
-        return [mitmdump_path.as_posix()]
-    if which("mitmdump"):
-        return ["mitmdump"]
-    if which("uvx"):
+def find_dump_executable(executable_name: str) -> list[str]:
+    local_path = Path(f"~/.contain-agent/{executable_name}").expanduser()
+    if local_path.exists():
+        return [local_path.as_posix()]
+    if which(executable_name):
+        return [executable_name]
+
+    if executable_name == "mitmdump" and which("uvx"):
         return ["uvx", "--from", "mitmproxy", "mitmdump"]
-    raise RuntimeError("mitmdump not found")
+
+    raise RuntimeError(f"{executable_name} not found")
 
 
-def start_mitmdump(dump_file: str, port: int = None, output=sys.stderr):
+def find_mitmdump() -> list[str]:
+    return find_dump_executable("mitmdump")
+
+
+def start_mitmdump(dump_file: str, port: int = None, executable: str = "mitmdump", output=sys.stderr):
     if port is None:
         port = find_free_port()
 
-    cmd = find_mitmdump()
+    cmd = find_dump_executable(executable)
     cmd.extend(["-p", str(port), "-w", dump_file])
 
-    print(f"Starting mitmproxy on port {port}: {' '.join(cmd)}", file=output)
+    print(f"Starting {executable} on port {port}: {' '.join(cmd)}", file=output)
     process = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
@@ -61,9 +67,9 @@ def start_mitmdump(dump_file: str, port: int = None, output=sys.stderr):
     time.sleep(1)
 
     if process.poll() is not None:
-        raise RuntimeError("mitmdump failed to start")
+        raise RuntimeError(f"{executable} failed to start")
 
-    print(f"mitmdump started with PID {process.pid}", file=output)
+    print(f"{executable} started with PID {process.pid}", file=output)
     return process, port
 
 
