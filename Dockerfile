@@ -111,6 +111,9 @@ RUN /home/agent/.local/share/fnm/fnm install 22
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
 
+ARG CACHE_BUST
+RUN date > /home/agent/.image-creation-date
+
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @anthropic-ai/claude-code
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @openai/codex
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @google/gemini-cli
