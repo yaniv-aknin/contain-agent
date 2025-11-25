@@ -108,6 +108,7 @@ RUN /home/agent/.local/bin/uv python install
 
 RUN curl -fsSL https://fnm.vercel.app/install | bash
 RUN /home/agent/.local/share/fnm/fnm install 22
+RUN curl -fsSL https://bun.sh/install | bash
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
 
