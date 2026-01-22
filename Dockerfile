@@ -115,7 +115,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
 ARG CACHE_BUST
 RUN date > /home/agent/.image-creation-date
 
-RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @anthropic-ai/claude-code
+RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @openai/codex
 RUN /home/agent/.local/share/fnm/fnm exec --using=22 npm install -g @google/gemini-cli
 RUN curl https://cursor.com/install -fsSL | bash
