@@ -7,7 +7,7 @@ A lightweight tool to run AI coding agents inside isolated Docker containers.
 1. Build the container image:
 
    ```bash
-   docker build -t contain-agent .
+   contain-agent --build-image
    ```
 
 2. Set up authentication:

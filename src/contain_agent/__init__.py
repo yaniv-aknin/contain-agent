@@ -1,13 +1,9 @@
-"""
-contain-agent: Run AI coding agents inside isolated Docker containers.
-"""
-
-from __future__ import annotations
-
 import os
 import shlex
 import subprocess
 import sys
+import time
+from importlib.resources import files
 from pathlib import Path
 from typing import Annotated
 
@@ -46,6 +42,49 @@ app = typer.Typer(
 def get_docker_cmd() -> str:
     """Get the docker command binary name or path."""
     return os.environ.get("CONTAIN_AGENT_DOCKER_CMD", "docker")
+
+
+def get_docker_context() -> tuple[Path, Path]:
+    """Locate the packaged Dockerfile and its build context directory."""
+    try:
+        pkg_root = files("contain_agent")
+        dockerfile = pkg_root / "Dockerfile"
+        if dockerfile.is_file():
+            return Path(str(dockerfile)), Path(str(pkg_root))
+    except TypeError, OSError, AttributeError:
+        pass
+
+    current = Path(__file__).resolve().parent
+    if (current / "Dockerfile").is_file():
+        return current / "Dockerfile", current
+
+    raise FileNotFoundError("Could not find Dockerfile for contain-agent.")
+
+
+def build_image_command(
+    image: str,
+    no_cache: bool = False,
+    fresh_rebuild: bool = False,
+    cache_bust_value: str | None = None,
+) -> list[str]:
+    """Build the docker build command line."""
+    dockerfile_path, context_dir = get_docker_context()
+    cmd = [
+        get_docker_cmd(),
+        "build",
+        "-t",
+        image,
+        "-f",
+        str(dockerfile_path.resolve()),
+    ]
+    if no_cache:
+        cmd.append("--no-cache")
+    elif fresh_rebuild:
+        val = cache_bust_value or str(int(time.time()))
+        cmd.extend(["--build-arg", f"CACHE_BUST={val}"])
+
+    cmd.append(str(context_dir.resolve()))
+    return cmd
 
 
 def is_sensitive_directory(path: Path) -> bool:
@@ -204,6 +243,27 @@ def run(
         str | None,
         typer.Option("--network", help="Docker network to connect container to"),
     ] = None,
+    build_image: Annotated[
+        bool,
+        typer.Option(
+            "--build-image",
+            help="Build image before running (cache hit if built)",
+        ),
+    ] = False,
+    fresh_rebuild_image: Annotated[
+        bool,
+        typer.Option(
+            "--fresh-rebuild-image",
+            help="Rebuild image updating agents (busts agent cache)",
+        ),
+    ] = False,
+    no_cache_rebuild_image: Annotated[
+        bool,
+        typer.Option(
+            "--no-cache-rebuild-image",
+            help="Rebuild image from scratch (no cache)",
+        ),
+    ] = False,
     rm: Annotated[
         bool,
         typer.Option("--rm/--no-rm", help="Remove container automatically after exit"),
@@ -279,6 +339,36 @@ def run(
     )
     config_mounts = get_config_mounts(share_config, effective_dotfiles_dir)
 
+    image_exists = check_image_exists(image)
+    should_build = (
+        build_image or fresh_rebuild_image or no_cache_rebuild_image or not image_exists
+    )
+
+    if should_build:
+        if not (build_image or fresh_rebuild_image or no_cache_rebuild_image):
+            print(
+                f"Docker image '{image}' not found locally. Building it...",
+                file=sys.stderr,
+            )
+        b_cmd = build_image_command(
+            image=image,
+            no_cache=no_cache_rebuild_image,
+            fresh_rebuild=fresh_rebuild_image,
+        )
+        if dry_run:
+            print(" ".join(shlex.quote(arg) for arg in b_cmd))
+        else:
+            try:
+                build_res = subprocess.run(b_cmd, check=False)
+                if build_res.returncode != 0:
+                    raise typer.Exit(build_res.returncode)
+            except FileNotFoundError:
+                print(
+                    "Error: 'docker' command not found. Please ensure Docker is installed and in your PATH.",
+                    file=sys.stderr,
+                )
+                raise typer.Exit(1)
+
     docker_cmd = build_docker_command(
         image=image,
         workspace_path=workspace_path,
@@ -293,15 +383,6 @@ def run(
     if dry_run:
         print(" ".join(shlex.quote(arg) for arg in docker_cmd))
         raise typer.Exit(0)
-
-    if not check_image_exists(image):
-        print(
-            f"Error: Docker image '{image}' not found locally.\n"
-            f"To build the image, run:\n"
-            f"  docker build -t {image} .",
-            file=sys.stderr,
-        )
-        raise typer.Exit(1)
 
     try:
         result = subprocess.run(docker_cmd, check=False)
