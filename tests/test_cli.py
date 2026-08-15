@@ -1,206 +1,231 @@
-import tempfile
-import unittest
-import unittest.mock
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
-from typer.testing import CliRunner
+import pytest
 
-from contain_agent import (
-    app,
-    build_docker_command,
-    get_config_mounts,
-    is_sensitive_directory,
-)
-
-runner = CliRunner()
+CLI_CMD = [sys.executable, "-c", "from contain_agent import app; app()"]
 
 
-class TestContainAgentCLI(unittest.TestCase):
-    def test_help(self):
-        result = runner.invoke(app, ["--help"])
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn(
-            "Run AI coding agents in an isolated Docker container", result.output
+@pytest.fixture(scope="session")
+def fake_docker(tmp_path_factory):
+    docker_bin = tmp_path_factory.mktemp("bin") / "docker"
+    docker_bin.write_text(f"""#!{sys.executable}
+import json, sys
+
+args = sys.argv[1:]
+if not args:
+    sys.exit(0)
+
+if args[0] == "image" and len(args) >= 2 and args[1] == "inspect":
+    sys.exit(1 if "nonexistent" in args[2] else 0)
+
+if args[0] == "run":
+    print("DOCKER_ARGS:" + json.dumps(args[1:]))
+    sys.exit(42 if "fail_42" in args else 0)
+
+sys.exit(0)
+""")
+    docker_bin.chmod(0o755)
+    return docker_bin
+
+
+@pytest.fixture
+def run_cli(fake_docker, tmp_path):
+    def _run(*args, home=None, cwd=None, fake_docker=None):
+        env = {
+            **os.environ,
+            "HOME": str(home or tmp_path / "home"),
+            "CONTAIN_AGENT_DOCKER_CMD": str(
+                fake_docker if fake_docker is not None else fake_docker_fixture
+            ),
+        }
+        Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
+        res = subprocess.run(
+            [*CLI_CMD, *args],
+            env=env,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        self.assertIn("--mount", result.output)
-        self.assertIn("--no-mount", result.output)
-        self.assertIn("--share-config", result.output)
-        self.assertIn("--no-share-config", result.output)
+        docker_args = []
+        for line in res.stdout.splitlines():
+            if line.startswith("DOCKER_ARGS:"):
+                docker_args = json.loads(line[len("DOCKER_ARGS:") :])
+                break
+        return res, docker_args
 
-    def test_default_dry_run(self):
-        result = runner.invoke(app, ["--dry-run"])
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("docker run --rm", result.output)
-        self.assertIn("contain-agent bash -l -i", result.output)
-
-    def test_mount_dir_and_command_dry_run(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir) / "my_project"
-            project_dir.mkdir()
-            result = runner.invoke(
-                app, ["--dry-run", str(project_dir), "cat", "bar.txt"]
-            )
-            self.assertEqual(result.exit_code, 0)
-            self.assertIn(
-                f"-v {project_dir.resolve()}:/workspace/my_project", result.output
-            )
-            self.assertIn("-w /workspace/my_project", result.output)
-            self.assertIn("bash -l -i -c 'cat bar.txt'", result.output)
-
-    def test_mount_dir_with_command_flags(self):
-        result = runner.invoke(app, ["--dry-run", ".", "ls", "-la"])
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("bash -l -i -c 'ls -la'", result.output)
-
-    def test_no_mount_with_command(self):
-        result = runner.invoke(app, ["--dry-run", "--no-mount", "ls", "-la"])
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("-w /workspace", result.output)
-        self.assertNotIn("/workspace/contain-agent", result.output)
-        self.assertIn("bash -l -i -c 'ls -la'", result.output)
-
-    def test_no_share_config_and_custom_image(self):
-        result = runner.invoke(
-            app,
-            [
-                "--dry-run",
-                "--no-share-config",
-                "--image",
-                "my-custom-img",
-                ".",
-                "yclaude",
-                "task",
-            ],
-        )
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("my-custom-img", result.output)
-        self.assertIn("bash -l -i -c 'yclaude task'", result.output)
-
-    def test_custom_dotfiles_dir_and_env_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            env_file = Path(tmpdir) / ".env"
-            env_file.write_text("FOO=BAR\n")
-            dotfiles_dir = Path(tmpdir) / "dotfiles"
-            dotfiles_dir.mkdir()
-            (dotfiles_dir / ".claude").mkdir()
-
-            result = runner.invoke(
-                app,
-                [
-                    "--dry-run",
-                    "--no-share-config",
-                    f"--dotfiles-dir={dotfiles_dir}",
-                    f"--env-file={env_file}",
-                    "--no-rm",
-                    ".",
-                ],
-            )
-            self.assertEqual(result.exit_code, 0)
-            self.assertIn(f"--env-file {env_file.resolve()}", result.output)
-            self.assertIn(
-                f"-v {(dotfiles_dir / '.claude').resolve()}:/home/agent/.claude",
-                result.output,
-            )
-            self.assertNotIn("--rm", result.output)
-
-    def test_is_sensitive_directory(self):
-        self.assertTrue(is_sensitive_directory(Path("/")))
-        self.assertTrue(is_sensitive_directory(Path("/tmp")))
-        self.assertTrue(is_sensitive_directory(Path.home()))
-        with tempfile.TemporaryDirectory() as tmpdir:
-            subdir = Path(tmpdir) / "subproject"
-            subdir.mkdir()
-            self.assertFalse(is_sensitive_directory(subdir))
-
-    def test_sensitive_directory_refusal(self):
-        result = runner.invoke(app, ["/tmp"])
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("Cowardly refusing to mount sensitive directory", result.output)
-
-    def test_sensitive_directory_force(self):
-        result = runner.invoke(app, ["--force", "--dry-run", "/tmp"])
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("docker run", result.output)
-
-    def test_nonexistent_directory_error(self):
-        result = runner.invoke(app, ["/path/to/nonexistent/directory/12345"])
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("does not exist", result.output)
-
-    def test_build_docker_command_basic(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ws = Path(tmpdir) / "myproject"
-            ws.mkdir()
-            cmd = build_docker_command(
-                image="contain-agent",
-                workspace_path=ws,
-                config_mounts=[("/host/.claude", "/home/agent/.claude")],
-                env_file_path=None,
-                command=["yclaude", "fix bug"],
-                rm=True,
-                interactive=True,
-            )
-            self.assertEqual(cmd[0:3], ["docker", "run", "--rm"])
-            self.assertIn("-it", cmd)
-            self.assertIn("-v", cmd)
-            self.assertIn("/host/.claude:/home/agent/.claude", cmd)
-            self.assertIn(f"{ws.resolve()}:/workspace/myproject", cmd)
-            self.assertIn("-w", cmd)
-            self.assertIn("/workspace/myproject", cmd)
-            self.assertIn("contain-agent", cmd)
-            self.assertIn("bash", cmd)
-            self.assertIn("-l", cmd)
-            self.assertIn("-i", cmd)
-            self.assertIn("-c", cmd)
-            self.assertIn("yclaude 'fix bug'", cmd)
-
-    def test_build_docker_command_no_mount(self):
-        cmd = build_docker_command(
-            image="contain-agent",
-            workspace_path=None,
-            config_mounts=None,
-            env_file_path=None,
-            command=None,
-            rm=False,
-            interactive=False,
-        )
-        self.assertEqual(cmd[0:2], ["docker", "run"])
-        self.assertNotIn("--rm", cmd)
-        self.assertIn("-i", cmd)
-        self.assertNotIn("-it", cmd)
-        self.assertIn("-w", cmd)
-        self.assertIn("/workspace", cmd)
-        self.assertIn("contain-agent", cmd)
-        self.assertEqual(cmd[-3:], ["bash", "-l", "-i"])
-
-    def test_get_config_mounts_no_share_config(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            dotfiles_dir = Path(tmpdir) / "dotfiles"
-            dotfiles_dir.mkdir()
-            (dotfiles_dir / ".claude").mkdir()
-            (dotfiles_dir / ".gemini").mkdir()
-
-            mounts = get_config_mounts(share_config=False, dotfiles_dir=dotfiles_dir)
-            self.assertEqual(len(mounts), 2)
-            self.assertEqual(mounts[0][1], "/home/agent/.claude")
-            self.assertEqual(mounts[1][1], "/home/agent/.gemini")
-
-    def test_missing_image_error(self):
-        with unittest.mock.patch(
-            "contain_agent.check_image_exists", return_value=False
-        ):
-            result = runner.invoke(app, ["--image", "nonexistent-image:latest", "."])
-            self.assertEqual(result.exit_code, 1)
-            self.assertIn(
-                "Docker image 'nonexistent-image:latest' not found locally",
-                result.output,
-            )
-
-    def test_network_option(self):
-        result = runner.invoke(app, ["--dry-run", "--network", "my-bridge-net", "."])
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("--network my-bridge-net", result.output)
+    fake_docker_fixture = fake_docker
+    return _run
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_default_invocation(run_cli, tmp_path):
+    ws = tmp_path / "my_project"
+    ws.mkdir()
+    res, args = run_cli(cwd=ws)
+    assert res.returncode == 0
+    assert "--rm" in args
+    assert f"{ws.resolve()}:/workspace/my_project" in args
+    assert "/workspace/my_project" in args
+    assert args[-3:] == ["bash", "-l", "-i"]
+
+
+def test_mount_dir_and_command(run_cli, tmp_path):
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    res, args = run_cli(str(ws), "cat", "bar.txt")
+    assert res.returncode == 0
+    assert f"{ws.resolve()}:/workspace/proj" in args
+    assert args[-5:] == ["bash", "-l", "-i", "-c", "cat bar.txt"]
+
+
+def test_command_flags_passed_intact(run_cli, tmp_path):
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    res, args = run_cli(".", "ls", "-la", "--color=auto", cwd=ws)
+    assert res.returncode == 0
+    assert args[-5:] == [
+        "bash",
+        "-l",
+        "-i",
+        "-c",
+        "ls -la --color=auto",
+    ]
+
+
+def test_no_mount(run_cli):
+    res, args = run_cli("--no-mount", "ls", "-la")
+    assert res.returncode == 0
+    assert "/workspace" in args
+    assert args[-5:] == ["bash", "-l", "-i", "-c", "ls -la"]
+
+
+def test_share_config(run_cli, tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".gemini").mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    res, args = run_cli(str(ws), home=home)
+    assert res.returncode == 0
+    assert f"{(home / '.claude').resolve()}:/home/agent/.claude" in args
+    assert f"{(home / '.gemini').resolve()}:/home/agent/.gemini" in args
+
+
+def test_no_share_config_dotfiles(run_cli, tmp_path):
+    home = tmp_path / "home"
+    (home / ".gemini").mkdir(parents=True)
+    dotfiles = home / ".contain-agent" / "dotfiles"
+    dotfiles.mkdir(parents=True)
+    (dotfiles / ".claude").mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    res, args = run_cli("--no-share-config", str(ws), home=home)
+    assert res.returncode == 0
+    assert f"{(dotfiles / '.claude').resolve()}:/home/agent/.claude" in args
+    assert f"{(home / '.gemini').resolve()}:/home/agent/.gemini" not in args
+
+
+def test_custom_dotfiles_dir(run_cli, tmp_path):
+    custom = tmp_path / "custom_dotfiles"
+    custom.mkdir()
+    (custom / ".custom_auth").touch()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    res, args = run_cli("--no-share-config", f"--dotfiles-dir={custom}", str(ws))
+    assert res.returncode == 0
+    assert f"{(custom / '.custom_auth').resolve()}:/home/agent/.custom_auth" in args
+
+
+def test_env_file_auto_discovery(run_cli, tmp_path):
+    home = tmp_path / "home"
+    env_dir = home / ".contain-agent"
+    env_dir.mkdir(parents=True)
+    env_file = env_dir / ".env"
+    env_file.write_text("FOO=BAR\n")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    res, args = run_cli(str(ws), home=home)
+    assert res.returncode == 0
+    assert "--env-file" in args
+    assert str(env_file.resolve()) in args
+
+
+def test_no_env_file_flag(run_cli, tmp_path):
+    home = tmp_path / "home"
+    env_dir = home / ".contain-agent"
+    env_dir.mkdir(parents=True)
+    (env_dir / ".env").write_text("FOO=BAR\n")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    res, args = run_cli("--no-env-file", str(ws), home=home)
+    assert res.returncode == 0
+    assert "--env-file" not in args
+
+
+def test_network_flag(run_cli, tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    res, args = run_cli("--network", "my_bridge", str(ws))
+    assert res.returncode == 0
+    assert "--network" in args
+    assert "my_bridge" in args
+
+
+def test_custom_image_and_no_rm(run_cli, tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    res, args = run_cli("--image", "custom:v1", "--no-rm", str(ws))
+    assert res.returncode == 0
+    assert "custom:v1" in args
+    assert "--rm" not in args
+
+
+def test_missing_image_error(run_cli, tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    res, _ = run_cli("--image", "nonexistent-image", str(ws))
+    assert res.returncode == 1
+    assert "Error: Docker image 'nonexistent-image' not found locally." in res.stderr
+    assert "docker build -t nonexistent-image ." in res.stderr
+
+
+def test_sensitive_directory_refusal_and_force(run_cli):
+    res, _ = run_cli("/tmp")
+    assert res.returncode == 1
+    assert "Cowardly refusing to mount sensitive directory" in res.stderr
+
+    res_force, args = run_cli("--force", "/tmp")
+    assert res_force.returncode == 0
+    assert "/workspace/tmp" in args
+
+
+def test_nonexistent_workspace_directory(run_cli):
+    res, _ = run_cli("/nonexistent/folder/12345")
+    assert res.returncode == 1
+    assert "does not exist" in res.stderr
+
+
+def test_exit_code_propagation(run_cli, tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    res, _ = run_cli(str(ws), "fail_42")
+    assert res.returncode == 42
+
+
+def test_docker_missing_error(run_cli, tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    nonexistent_docker = tmp_path / "missing_docker_executable"
+    res, _ = run_cli(str(ws), fake_docker=nonexistent_docker)
+    assert res.returncode == 1
+    assert "Error: 'docker' command not found." in res.stderr
+    assert "Please ensure Docker is installed and in your PATH." in res.stderr

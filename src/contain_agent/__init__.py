@@ -4,6 +4,7 @@ contain-agent: Run AI coding agents inside isolated Docker containers.
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import sys
@@ -13,8 +14,6 @@ from typing import Annotated
 import typer
 
 DEFAULT_IMAGE = "contain-agent"
-DEFAULT_DOTFILES_DIR = Path.home() / ".contain-agent" / "dotfiles"
-DEFAULT_ENV_FILE = Path.home() / ".contain-agent" / ".env"
 
 KNOWN_CONFIG_NAMES = [
     ".claude",
@@ -44,6 +43,11 @@ app = typer.Typer(
 )
 
 
+def get_docker_cmd() -> str:
+    """Get the docker command binary name or path."""
+    return os.environ.get("CONTAIN_AGENT_DOCKER_CMD", "docker")
+
+
 def is_sensitive_directory(path: Path) -> bool:
     """Check if a path is a sensitive directory that should not be mounted without --force."""
     try:
@@ -51,7 +55,19 @@ def is_sensitive_directory(path: Path) -> bool:
     except OSError:
         return False
 
-    for sensitive in SENSITIVE_DIRECTORIES:
+    sensitive_candidates = [
+        Path("/"),
+        Path("/tmp"),
+        Path.home(),
+        Path("/etc"),
+        Path("/var"),
+        Path("/usr"),
+        Path("/System"),
+        Path("/Library"),
+        Path("/Applications"),
+    ]
+
+    for sensitive in sensitive_candidates:
         try:
             if sensitive.exists() and resolved == sensitive.resolve():
                 return True
@@ -69,7 +85,7 @@ def get_config_mounts(share_config: bool, dotfiles_dir: Path) -> list[tuple[str,
         for name in KNOWN_CONFIG_NAMES:
             host_path = home / name
             if host_path.exists():
-                mounts.append((str(host_path), f"/home/agent/{name}"))
+                mounts.append((str(host_path.resolve()), f"/home/agent/{name}"))
     else:
         if dotfiles_dir.exists() and dotfiles_dir.is_dir():
             for item in sorted(dotfiles_dir.iterdir()):
@@ -89,7 +105,7 @@ def build_docker_command(
     interactive: bool = True,
 ) -> list[str]:
     """Build the docker run command line."""
-    cmd = ["docker", "run"]
+    cmd = [get_docker_cmd(), "run"]
 
     if rm:
         cmd.append("--rm")
@@ -133,7 +149,7 @@ def check_image_exists(image: str) -> bool:
     """Check if the Docker image exists locally."""
     try:
         res = subprocess.run(
-            ["docker", "image", "inspect", image],
+            [get_docker_cmd(), "image", "inspect", image],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
@@ -163,12 +179,12 @@ def run(
         ),
     ] = True,
     dotfiles_dir: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--dotfiles-dir",
-            help="Directory for dotfiles when --no-share-config is used",
+            help="Directory for dotfiles when --no-share-config is used (default: ~/.contain-agent/dotfiles)",
         ),
-    ] = DEFAULT_DOTFILES_DIR,
+    ] = None,
     env_file: Annotated[
         Path | None,
         typer.Option(
@@ -250,11 +266,18 @@ def run(
                 )
                 raise typer.Exit(1)
             env_file_path = env_file
-        elif DEFAULT_ENV_FILE.is_file():
-            env_file_path = DEFAULT_ENV_FILE
+        else:
+            default_env = Path.home() / ".contain-agent" / ".env"
+            if default_env.is_file():
+                env_file_path = default_env
 
     # Determine config mounts
-    config_mounts = get_config_mounts(share_config, dotfiles_dir)
+    effective_dotfiles_dir = (
+        dotfiles_dir
+        if dotfiles_dir is not None
+        else (Path.home() / ".contain-agent" / "dotfiles")
+    )
+    config_mounts = get_config_mounts(share_config, effective_dotfiles_dir)
 
     docker_cmd = build_docker_command(
         image=image,
