@@ -1,2 +1,0 @@
-#!/bin/bash
-exec cursor-agent --force --approve-mcps "$@"

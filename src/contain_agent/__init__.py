@@ -1,380 +1,293 @@
-#!/usr/bin/env python3
 """
-Utility to run containerized AI coding agents.
+contain-agent: Run AI coding agents inside isolated Docker containers.
 """
 
-import os
+from __future__ import annotations
+
+import shlex
 import subprocess
 import sys
-
 from pathlib import Path
-from typing import Optional
-import typer
-from typing_extensions import Annotated
+from typing import Annotated
 
-from .proxy import (
-    find_free_port,
-    get_proxy_env,
-    get_transparent_proxy_env,
-    start_mitmdump,
-    stop_mitmdump,
-)
+import typer
 
 DEFAULT_IMAGE = "contain-agent"
+DEFAULT_DOTFILES_DIR = Path.home() / ".contain-agent" / "dotfiles"
+DEFAULT_ENV_FILE = Path.home() / ".contain-agent" / ".env"
+
+KNOWN_CONFIG_NAMES = [
+    ".claude",
+    ".claude.json",
+    ".gemini",
+    ".codex",
+    ".anthropic",
+    ".openai",
+]
+
+SENSITIVE_DIRECTORIES = [
+    Path("/"),
+    Path("/tmp"),
+    Path.home(),
+    Path("/etc"),
+    Path("/var"),
+    Path("/usr"),
+    Path("/System"),
+    Path("/Library"),
+    Path("/Applications"),
+]
+
+app = typer.Typer(
+    help="A lightweight tool to run AI coding agents inside isolated Docker containers.",
+    add_completion=False,
+    context_settings={"allow_interspersed_args": False},
+)
 
 
 def is_sensitive_directory(path: Path) -> bool:
-    """Check if a path is a sensitive directory that should not be mounted."""
-    sensitive_paths = [
-        Path("/"),
-        Path("/tmp"),
-        Path(os.path.expanduser("~")),  # $HOME
-        Path("/etc"),
-    ]
-    return any(
-        path.samefile(sensitive) for sensitive in sensitive_paths if sensitive.exists()
-    )
+    """Check if a path is a sensitive directory that should not be mounted without --force."""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+
+    for sensitive in SENSITIVE_DIRECTORIES:
+        try:
+            if sensitive.exists() and resolved == sensitive.resolve():
+                return True
+        except OSError:
+            continue
+    return False
 
 
-def get_profile_paths() -> dict[str, Path]:
-    """Get available profiles from both local ./profiles/ and ~/.contain-agent/."""
-    profiles = {}
+def get_config_mounts(share_config: bool, dotfiles_dir: Path) -> list[tuple[str, str]]:
+    """Determine volume mounts for agent configuration / dotfiles."""
+    mounts: list[tuple[str, str]] = []
 
-    local_profiles_dir = Path.cwd() / "profiles"
-    if local_profiles_dir.exists():
-        for profile_dir in local_profiles_dir.iterdir():
-            if profile_dir.is_dir():
-                profiles[profile_dir.name] = profile_dir
-
-    home_profiles_dir = Path.home() / ".contain-agent"
-    if home_profiles_dir.exists():
-        for profile_dir in home_profiles_dir.iterdir():
-            if profile_dir.is_dir() and profile_dir.name not in profiles:
-                profiles[profile_dir.name] = profile_dir
-
-    return profiles
-
-
-def get_profile_mounts(profile_dir: Path) -> list:
-    """Get list of volume mounts for a profile."""
-    mounts = []
-    for item in profile_dir.iterdir():
-        host_path = str(item.absolute())
-        container_path = f"/home/agent/{item.name}"
-        mounts.append((host_path, container_path))
+    if share_config:
+        home = Path.home()
+        for name in KNOWN_CONFIG_NAMES:
+            host_path = home / name
+            if host_path.exists():
+                mounts.append((str(host_path), f"/home/agent/{name}"))
+    else:
+        if dotfiles_dir.exists() and dotfiles_dir.is_dir():
+            for item in sorted(dotfiles_dir.iterdir()):
+                mounts.append((str(item.resolve()), f"/home/agent/{item.name}"))
 
     return mounts
 
 
 def build_docker_command(
-    image_name: str,
-    workspace_path: str = None,
-    proxy_vars: dict[str, str] = None,
-    profile_mounts: list = None,
+    image: str = DEFAULT_IMAGE,
+    workspace_path: Path | None = None,
+    config_mounts: list[tuple[str, str]] | None = None,
+    env_file_path: Path | None = None,
+    command: list[str] | None = None,
+    network: str | None = None,
     rm: bool = True,
-    env_file_path: Path = None,
-    command: list[str] = None,
-    net_admin: bool = True,
-    cert_dir: Path = None,
-) -> list:
-    """Build the docker run command with appropriate flags."""
+    interactive: bool = True,
+) -> list[str]:
+    """Build the docker run command line."""
     cmd = ["docker", "run"]
 
     if rm:
         cmd.append("--rm")
 
-    cmd.append("-it")
+    if interactive:
+        cmd.append("-it")
+    else:
+        cmd.append("-i")
 
-    if net_admin:
-        cmd.extend(["--cap-add", "NET_ADMIN"])
+    if network:
+        cmd.extend(["--network", network])
 
     if env_file_path and env_file_path.exists():
-        cmd.extend(["--env-file", str(env_file_path)])
-        print(f" - Loading environment from {env_file_path}")
+        cmd.extend(["--env-file", str(env_file_path.resolve())])
 
-    if proxy_vars and cert_dir:
-        cmd.extend(["-v", f"{cert_dir}:/home/agent/.certs:ro"])
-
-        for env_var, value in proxy_vars.items():
-            container_value = value.replace(
-                str(cert_dir), "/home/agent/.certs"
-            )
-            cmd.extend(["-e", f"{env_var}={container_value}"])
-
-    if workspace_path:
-        workspace_abs = os.path.abspath(workspace_path)
-        if not os.path.exists(workspace_abs):
-            print(
-                f"ERROR: Workspace path does not exist: {workspace_abs}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        cmd.extend(["-v", f"{workspace_abs}:/workspace"])
-
-    if profile_mounts:
-        for host_path, container_path in profile_mounts:
+    if config_mounts:
+        for host_path, container_path in config_mounts:
             cmd.extend(["-v", f"{host_path}:{container_path}"])
 
-    cmd.append(image_name)
+    if workspace_path:
+        workspace_resolved = workspace_path.resolve()
+        basename = workspace_resolved.name
+        container_workspace = f"/workspace/{basename}"
+        cmd.extend(["-v", f"{workspace_resolved}:{container_workspace}"])
+        cmd.extend(["-w", container_workspace])
+    else:
+        cmd.extend(["-w", "/workspace"])
+
+    cmd.append(image)
 
     if command:
-        import shlex
-        quoted_command = ' '.join(shlex.quote(arg) for arg in command)
-        cmd.extend(['bash', '-l', '-i', '-c', quoted_command])
+        quoted_command = " ".join(shlex.quote(arg) for arg in command)
+        cmd.extend(["bash", "-l", "-i", "-c", quoted_command])
+    else:
+        cmd.extend(["bash", "-l", "-i"])
 
     return cmd
 
 
-app = typer.Typer(help=f"Run interactive shell with {DEFAULT_IMAGE} container")
+def check_image_exists(image: str) -> bool:
+    """Check if the Docker image exists locally."""
+    try:
+        res = subprocess.run(
+            ["docker", "image", "inspect", image],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return res.returncode == 0
+    except FileNotFoundError, OSError:
+        return True
 
 
-def main():
-    app()
-
-
-@app.command(context_settings={"allow_interspersed_args": False})
+@app.command()
 def run(
     args: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Argument(
-            help="[MOUNT_DIR] [COMMAND...] - Mount directory (optional) and command to run in container"
+            help="[MOUNT_DIR] [COMMAND...] - Directory to mount and command to execute inside container"
         ),
     ] = None,
-    dump: Annotated[
-        Optional[str], typer.Option(help="Start proxy and dump traffic: [executable:]file")
-    ] = None,
-    dump_file: Annotated[
-        Optional[str], typer.Option(help="File to dump traffic to")
-    ] = None,
-    dump_executable: Annotated[
-        str,
+    mount: Annotated[
+        bool,
+        typer.Option("--mount/--no-mount", help="Mount workspace directory"),
+    ] = True,
+    share_config: Annotated[
+        bool,
         typer.Option(
-            help="Executable to use for dumping (default: mitmdump)"
+            "--share-config/--no-share-config",
+            help="Mount agent configuration from host home directory",
         ),
-    ] = "mitmdump",
-    proxy_type: Annotated[
-        Optional[str],
+    ] = True,
+    dotfiles_dir: Annotated[
+        Path,
         typer.Option(
-            help="Proxy type: 'http' for HTTP_PROXY env vars, 'transparent' for transparent proxying with xproxy"
+            "--dotfiles-dir",
+            help="Directory for dotfiles when --no-share-config is used",
         ),
-    ] = None,
-    proxy_host: Annotated[
-        str,
-        typer.Option(
-            help="Proxy hostname (default: host.rancher-desktop.internal)"
-        ),
-    ] = "host.rancher-desktop.internal",
-    proxy_port: Annotated[
-        Optional[int],
-        typer.Option(
-            help="Proxy port to use (default: 8080)"
-        ),
-    ] = None,
-    ca_cert: Annotated[
-        Optional[Path],
-        typer.Option(
-            help="CA certificate file for proxy HTTPS interception (default: ~/.mitmproxy/mitmproxy-ca-cert.pem)"
-        ),
-    ] = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.pem",
-    profile: Annotated[
-        Optional[str],
-        typer.Option(
-            help="Mount files/dirs from profile directory to /home/agent/<name>"
-        ),
-    ] = None,
-    no_profile: Annotated[
-        bool, typer.Option("--no-profile", help="Do not use default profile")
-    ] = False,
-    rm: Annotated[bool, typer.Option(help="Remove container after exit")] = True,
-    force: Annotated[
-        bool, typer.Option(help="Force mounting sensitive directories")
-    ] = False,
-    mount: Annotated[bool, typer.Option(help="Mount workspace directory")] = True,
+    ] = DEFAULT_DOTFILES_DIR,
     env_file: Annotated[
-        Optional[str],
+        Path | None,
         typer.Option(
-            help="Path to .env file to load (default: <profile>/.env if profile is used)"
+            "--env-file",
+            help="Path to .env file to load (default: ~/.contain-agent/.env if present)",
         ),
     ] = None,
-    image: Annotated[str, typer.Option(help="Docker image name")] = DEFAULT_IMAGE,
-    net_admin: Annotated[
-        bool, typer.Option(help="Grant NET_ADMIN capability (allows iptables)")
+    no_env_file: Annotated[
+        bool,
+        typer.Option("--no-env-file", help="Do not load any .env file"),
     ] = False,
-    no_net_admin: Annotated[
-        bool, typer.Option(help="Explicitly disable NET_ADMIN capability")
+    image: Annotated[
+        str,
+        typer.Option("--image", help="Docker image to run"),
+    ] = DEFAULT_IMAGE,
+    network: Annotated[
+        str | None,
+        typer.Option("--network", help="Docker network to connect container to"),
+    ] = None,
+    rm: Annotated[
+        bool,
+        typer.Option("--rm/--no-rm", help="Remove container automatically after exit"),
+    ] = True,
+    force: Annotated[
+        bool,
+        typer.Option("-f", "--force", help="Allow mounting sensitive host directories"),
     ] = False,
-):
-    """Run coding agents in a container."""
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the docker command without executing it"),
+    ] = False,
+) -> None:
+    """Run AI coding agents in an isolated Docker container."""
+    workspace_path: Path | None = None
+    command_args: list[str] = []
 
-    if dump is not None:
-        if ":" in dump:
-            exec_name, file_name = dump.split(":", 1)
-            if dump_file is None:
-                dump_file = file_name
-            if dump_executable == "mitmdump":
-                dump_executable = exec_name
-        else:
-            if dump_file is None:
-                dump_file = dump
-
-    if dump is None and dump_file is None:
-        if dump_executable != "mitmdump":
-            print("ERROR: --dump-executable requires --dump or --dump-file to be specified", file=sys.stderr)
-            raise typer.Exit(1)
-
-    if dump_file is not None and proxy_port is None:
-        proxy_port = find_free_port()
-
-    use_proxy = dump_file is not None or proxy_port is not None or proxy_type is not None
-
-    if use_proxy and proxy_type is None:
-        proxy_type = "http"
-
-    if use_proxy and proxy_port is None:
-        proxy_port = 8080
-
-    if proxy_type is not None and proxy_type not in ("http", "transparent"):
-        print(f"ERROR: --proxy-type must be 'http' or 'transparent', got '{proxy_type}'", file=sys.stderr)
-        raise typer.Exit(1)
-
-    if proxy_type == "transparent" and no_net_admin:
-        print("ERROR: --proxy-type transparent requires NET_ADMIN capability, cannot use with --no-net-admin", file=sys.stderr)
-        raise typer.Exit(1)
-
-    effective_net_admin = net_admin or (proxy_type == "transparent")
-    if no_net_admin:
-        effective_net_admin = False
-
-    workspace_arg = None
-    command_args = []
-
-    if args:
-        if mount:
-            if len(args) >= 1:
-                first_arg = args[0]
-                workspace_arg = first_arg
-                command_args = args[1:]
-        else:
-            command_args = args
-
-    if workspace_arg and not Path(workspace_arg).exists():
-        print(f"{workspace_arg} does not exist; perhaps you forgot to use --no-mount?")
-        raise typer.Exit(1)
-
-    profile_dir = None
-    profile_mounts = None
-    env_file_path = None
-
-    if not profile and not no_profile:
-        default_profile_path = Path.home() / ".contain-agent" / "default"
-        if default_profile_path.exists() and default_profile_path.is_dir():
-            profile = "default"
-
-    if profile:
-        profiles = get_profile_paths()
-        profile_dir = profiles.get(profile)
-        if not profile_dir:
-            print(f"Error: Profile '{profile}' not found")
-            print("\nAvailable profiles:")
-            for name in sorted(profiles.keys()):
-                print(f" - {name}")
-            raise typer.Exit(1)
-
-        profile_mounts = get_profile_mounts(profile_dir)
-        print(f"Using profile '{profile}' from {profile_dir}")
-        print(f"Mounting {len(profile_mounts)} items from profile:")
-        for host_path, container_path in profile_mounts:
-            print(f"  {host_path} -> {container_path}")
-
-        if not env_file:
-            env_file_path = profile_dir / ".env"
-
-    if env_file:
-        try:
-            env_file_path = Path(env_file).resolve()
-        except Exception:
-            print(f"Error: Cannot resolve env file path '{env_file}'")
-            raise typer.Exit(1)
-
-    workspace_path = None
     if mount:
-        if not workspace_arg:
-            workspace_arg = os.getcwd()
+        if args:
+            workspace_arg = args[0]
+            command_args = args[1:]
+            workspace_path = Path(workspace_arg)
+        else:
+            workspace_path = Path.cwd()
+
+        if not workspace_path.exists():
+            print(
+                f"Error: Directory '{workspace_path}' does not exist (did you forget --no-mount?)",
+                file=sys.stderr,
+            )
+            raise typer.Exit(1)
 
         try:
-            workspace_path = Path(workspace_arg).resolve()
-        except Exception:
-            print(f"Error: Cannot resolve directory '{workspace_arg}' to absolute path")
+            workspace_path = workspace_path.resolve()
+        except OSError as e:
+            print(
+                f"Error: Cannot resolve directory '{workspace_path}': {e}",
+                file=sys.stderr,
+            )
             raise typer.Exit(1)
 
         if is_sensitive_directory(workspace_path) and not force:
             print(
-                f"Cowardly refusing to mount directory '{workspace_path}'. Use --force to override."
+                f"Cowardly refusing to mount sensitive directory '{workspace_path}'. Use --force to override.",
+                file=sys.stderr,
             )
             raise typer.Exit(1)
-
-    print("\nLaunching container with:")
-    if profile:
-        print(f" - Profile: {profile}")
-    if workspace_path:
-        print(f" - Working directory: {workspace_path}")
     else:
-        print(" - No workspace mounted")
-    if command_args:
-        print(f" - Command: {' '.join(command_args)}")
-    if rm:
-        print(" - Container will be removed after exit")
-    else:
-        print(" - Container will be preserved after exit")
-    if force:
-        print(" - Force flag is enabled (protection bypassed)")
+        if args:
+            command_args = args
 
-    mitm_process = None
-    proxy_vars = {}
-    cert_dir = None
+    # Determine env file
+    env_file_path: Path | None = None
+    if not no_env_file:
+        if env_file:
+            if not env_file.exists() or not env_file.is_file():
+                print(
+                    f"Error: Specified env file '{env_file}' does not exist.",
+                    file=sys.stderr,
+                )
+                raise typer.Exit(1)
+            env_file_path = env_file
+        elif DEFAULT_ENV_FILE.is_file():
+            env_file_path = DEFAULT_ENV_FILE
 
-    if use_proxy:
-        if not ca_cert.exists():
-            print(f"ERROR: CA certificate not found at {ca_cert}")
-            print("Please run 'mitmproxy' once to generate certificates, or specify --ca-cert")
-            raise typer.Exit(1)
-
-        cert_dir = ca_cert.parent
-        container_cert_path = Path("/home/agent/.certs") / ca_cert.name
-
-        if dump_file:
-            mitm_process, actual_port = start_mitmdump(dump_file, proxy_port, dump_executable)
-        else:
-            actual_port = proxy_port
-
-        if proxy_type == "http":
-            proxy_vars = get_proxy_env(proxy_host, actual_port, container_cert_path)
-        elif proxy_type == "transparent":
-            proxy_vars = get_transparent_proxy_env(proxy_host, actual_port, container_cert_path)
+    # Determine config mounts
+    config_mounts = get_config_mounts(share_config, dotfiles_dir)
 
     docker_cmd = build_docker_command(
-        image,
-        workspace_path=str(workspace_path) if workspace_path else None,
-        proxy_vars=proxy_vars if proxy_vars else None,
-        profile_mounts=profile_mounts,
-        rm=rm,
+        image=image,
+        workspace_path=workspace_path,
+        config_mounts=config_mounts,
         env_file_path=env_file_path,
-        command=command_args if command_args else None,
-        net_admin=effective_net_admin,
-        cert_dir=cert_dir,
+        command=command_args,
+        network=network,
+        rm=rm,
+        interactive=sys.stdin.isatty(),
     )
 
-    print(f"\nStarting container: {' '.join(docker_cmd)}\n")
+    if dry_run:
+        print(" ".join(shlex.quote(arg) for arg in docker_cmd))
+        raise typer.Exit(0)
+
+    if not check_image_exists(image):
+        print(
+            f"Error: Docker image '{image}' not found locally.\n"
+            f"To build the image, run:\n"
+            f"  docker build -t {image} .",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
 
     try:
-
-        result = subprocess.run(docker_cmd)
-        exit_code = result.returncode
+        result = subprocess.run(docker_cmd, check=False)
+        raise typer.Exit(result.returncode)
+    except FileNotFoundError:
+        print(
+            "Error: 'docker' command not found. Please ensure Docker is installed and in your PATH.",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
     except KeyboardInterrupt:
-        print("\nInterrupted by user")
-        exit_code = 130
-    finally:
-        if mitm_process:
-            stop_mitmdump(mitm_process, dump_file)
-
-    raise typer.Exit(exit_code)
+        raise typer.Exit(130)
