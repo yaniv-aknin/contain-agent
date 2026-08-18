@@ -66,9 +66,13 @@ def build_image_command(
     no_cache: bool = False,
     fresh_rebuild: bool = False,
     cache_bust_value: str | None = None,
+    uid: int | None = None,
 ) -> list[str]:
     """Build the docker build command line."""
     dockerfile_path, context_dir = get_docker_context()
+    effective_uid = (
+        uid if uid is not None else (os.getuid() if hasattr(os, "getuid") else 1000)
+    )
     cmd = [
         get_docker_cmd(),
         "build",
@@ -76,6 +80,8 @@ def build_image_command(
         image,
         "-f",
         str(dockerfile_path.resolve()),
+        "--build-arg",
+        f"UID={effective_uid}",
     ]
     if no_cache:
         cmd.append("--no-cache")

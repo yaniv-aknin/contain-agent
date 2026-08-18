@@ -88,7 +88,8 @@ RUN apt-get update && apt-get install -y \
     libmanette-0.2-0 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -s /bin/bash -u 1001 agent
+ARG UID=1000
+RUN (userdel -r ubuntu || true) && useradd -m -s /bin/bash -u ${UID} agent
 
 RUN mkdir -p /workspace && chown agent:agent /workspace
 

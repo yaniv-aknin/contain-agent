@@ -222,7 +222,8 @@ def test_build_image_flag(run_cli, tmp_path):
     assert "-f" in build_args
     assert "Dockerfile" in build_args[build_args.index("-f") + 1]
     assert "--no-cache" not in build_args
-    assert "--build-arg" not in build_args
+    assert "--build-arg" in build_args
+    assert f"UID={os.getuid()}" in build_args
 
 
 def test_fresh_rebuild_image_flag(run_cli, tmp_path):
@@ -233,8 +234,8 @@ def test_fresh_rebuild_image_flag(run_cli, tmp_path):
     assert len(calls) == 3  # inspect + build + run
     build_args = calls[1]
     assert "--build-arg" in build_args
-    idx = build_args.index("--build-arg")
-    assert build_args[idx + 1].startswith("CACHE_BUST=")
+    assert f"UID={os.getuid()}" in build_args
+    assert any(a.startswith("CACHE_BUST=") for a in build_args)
 
 
 def test_no_cache_rebuild_image_flag(run_cli, tmp_path):
@@ -245,6 +246,7 @@ def test_no_cache_rebuild_image_flag(run_cli, tmp_path):
     assert len(calls) == 3  # inspect + build + run
     build_args = calls[1]
     assert "--no-cache" in build_args
+    assert f"UID={os.getuid()}" in build_args
 
 
 def test_auto_build_when_image_missing(run_cli, tmp_path):
@@ -307,3 +309,17 @@ def test_docker_missing_error(run_cli, tmp_path):
     assert len(calls) == 0
     assert "Error: 'docker' command not found." in res.stderr
     assert "Please ensure Docker is installed and in your PATH." in res.stderr
+
+
+def test_build_image_command_uid():
+    from contain_agent import build_image_command
+
+    cmd_default = build_image_command("test-image")
+    assert "--build-arg" in cmd_default
+    idx = cmd_default.index("--build-arg")
+    assert cmd_default[idx + 1] == f"UID={os.getuid()}"
+
+    cmd_custom = build_image_command("test-image", uid=1234)
+    assert "--build-arg" in cmd_custom
+    idx = cmd_custom.index("--build-arg")
+    assert cmd_custom[idx + 1] == "UID=1234"
