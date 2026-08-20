@@ -376,3 +376,14 @@ def test_default_command_changes_command_line(run_cli, tmp_path):
     assert res.returncode == 0
     run_args = calls[-1]
     assert run_args[-5:] == ["bash", "-l", "-i", "-c", "claude --verbose"]
+
+
+def test_main_module_execution():
+    res = subprocess.run(
+        [sys.executable, "-m", "contain_agent", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0
+    assert "Run AI coding agents in an isolated Docker container." in res.stdout
