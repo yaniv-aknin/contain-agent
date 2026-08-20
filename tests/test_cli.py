@@ -323,3 +323,56 @@ def test_build_image_command_uid():
     assert "--build-arg" in cmd_custom
     idx = cmd_custom.index("--build-arg")
     assert cmd_custom[idx + 1] == "UID=1234"
+
+
+def test_load_valid_settings(tmp_path):
+    from contain_agent import load_settings
+
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "default_command": "claude",
+                "default_args": ["--verbose", "--model", "opus"],
+            }
+        )
+    )
+    s = load_settings(settings_file)
+    assert s.default_command == "claude"
+    assert s.default_args == ["--verbose", "--model", "opus"]
+
+
+def test_load_invalid_settings(tmp_path):
+    from contain_agent import Settings, load_settings
+
+    # Corrupt JSON syntax
+    p1 = tmp_path / "corrupt.json"
+    p1.write_text("{not valid json")
+    assert load_settings(p1) == Settings()
+
+    # Schema mismatch
+    p2 = tmp_path / "schema_mismatch.json"
+    p2.write_text(json.dumps({"default_args": "not-a-list"}))
+    assert load_settings(p2) == Settings()
+
+
+def test_default_command_changes_command_line(run_cli, tmp_path):
+    home = tmp_path / "home"
+    agent_dir = home / ".contain-agent"
+    agent_dir.mkdir(parents=True)
+    settings_file = agent_dir / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "default_command": "claude",
+                "default_args": ["--verbose"],
+            }
+        )
+    )
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    res, calls = run_cli(str(ws), home=home)
+    assert res.returncode == 0
+    run_args = calls[-1]
+    assert run_args[-5:] == ["bash", "-l", "-i", "-c", "claude --verbose"]

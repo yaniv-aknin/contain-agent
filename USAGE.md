@@ -60,4 +60,4 @@ appropriately long/defensive timeout, based on time complexity.
 2. Mounts homedir configs (`.claude`, `.gemini`, `.codex`) to `/home/agent/`
    - Optionally uses configs under `~/contain-agent/dotfiles` if `--no-share-config` is passed
 3. Loads `~/.contain-agent/.env` into the environment
-4. Runs command via `bash -l -i -c`
+4. Runs command via `bash -l -i -c` (falling back to `default_command` and `default_args` from `~/.contain-agent/settings.json`, or interactive `bash` if not configured)

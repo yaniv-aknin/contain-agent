@@ -1,3 +1,4 @@
+import json
 import os
 import shlex
 import subprocess
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import BaseModel, Field, ValidationError
 
 DEFAULT_IMAGE = "contain-agent"
 
@@ -204,6 +206,31 @@ def check_image_exists(image: str) -> bool:
         return True
 
 
+class Settings(BaseModel):
+    default_command: str | None = None
+    default_args: list[str] = Field(default_factory=list)
+
+
+def load_settings(settings_path: Path | None = None) -> Settings:
+    """Load settings from ~/.contain-agent/settings.json if it exists."""
+    path = (
+        settings_path
+        if settings_path is not None
+        else (Path.home() / ".contain-agent" / "settings.json")
+    )
+    if path.is_file():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return Settings.model_validate(data)
+        except json.JSONDecodeError, ValidationError, OSError:
+            return Settings()
+    return Settings()
+
+
+settings: Settings = load_settings()
+
+
 @app.command()
 def run(
     args: Annotated[
@@ -320,6 +347,9 @@ def run(
     else:
         if args:
             command_args = args
+
+    if not command_args and settings.default_command:
+        command_args = [settings.default_command, *settings.default_args]
 
     # Determine env file
     env_file_path: Path | None = None
